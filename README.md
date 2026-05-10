@@ -6,7 +6,7 @@
 
 # [LemurPouch](https://lemurpouch.com)
 
-LAN file sharing that works on the most restrictive networks — corporate firewalls, captive portals, aggressive NAT — by asking the network for the one thing it nearly always allows: outbound TCP.
+LAN file sharing that works on the most restrictive networks — corporate firewalls, aggressive NAT — by asking the network for the one thing it nearly always allows: outbound TCP.
 
 You run a single relay binary on the LAN. Everyone else opens its URL in a browser. No app to install, no inbound ports, no WebRTC, no STUN/ICE/TURN, no UDP. Two browsers connect outbound to the relay, verify each other by a six-word fingerprint, and exchange end-to-end encrypted files that the relay routes byte-for-byte without ever decrypting.
 

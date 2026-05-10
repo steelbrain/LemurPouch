@@ -4,7 +4,7 @@ Conventions for AI agents (Claude Code, Codex, etc.) working in this repository.
 
 ## What this is
 
-LemurPouch ([lemurpouch.com](https://lemurpouch.com)) — a LAN file-sharing relay. Two clients open outbound WebSocket connections to a Go relay; the relay routes opaque encrypted ciphertext between them. Designed to work on the most restrictive networks (corporate firewalls, captive portals) — the only thing it asks of the network is "outbound TCP works."
+LemurPouch ([lemurpouch.com](https://lemurpouch.com)) — a LAN file-sharing relay. Two clients open outbound WebSocket connections to a Go relay; the relay routes opaque encrypted ciphertext between them. Designed to work on the most restrictive networks (corporate firewalls, aggressive NAT) — the only thing it asks of the network is "outbound TCP works."
 
 The Go module path is `github.com/steelbrain/lemur-pouch`. The local working-directory name may still be `file-sharing/` on some checkouts (a leftover from before the project rename); leave that alone unless explicitly asked to rename it — every tool path that encodes the directory (e.g. the Claude memory directory under `~/.claude/projects/`) would also have to move.
 
@@ -237,7 +237,7 @@ This appendix was the standalone `DESIGN.md` until 2026-05-10. The protocol is n
 
 ### Goal
 
-File sharing across operating systems that works on the most restrictive networks — corporate firewalls, captive portals, aggressive NATs. The transport is a LAN-resident relay server. Both clients open *outbound* WebSocket connections to the relay; no client ever needs an inbound port. The relay is also the consent gatekeeper.
+File sharing across operating systems that works on the most restrictive networks — corporate firewalls, aggressive NATs. The transport is a LAN-resident relay server. Both clients open *outbound* WebSocket connections to the relay; no client ever needs an inbound port. The relay is also the consent gatekeeper.
 
 ### Non-Goals
 
