@@ -46,6 +46,7 @@ import {
   type OutboundTransfer,
   finalizeBlobUrl,
   formatBytes,
+  markOutboundStreaming,
   tryAssemble,
 } from './transfer/state'
 
@@ -700,10 +701,18 @@ export default function App() {
       // until after the next render), trip its abort guard, and
       // return without sending any chunks. The useEffect will set the
       // ref to the same value again on re-render — harmless.
+      //
+      // The setOutbound call is a functional updater (not a value
+      // setter built from outboundRef.current) so the React state
+      // write only touches THIS transfer's entry — a value setter
+      // built from the synchronous ref snapshot would clobber any
+      // progress / 'done' updates that other transfers' chunk loops
+      // had queued before the ref-mirror effect caught up, leaving an
+      // earlier transfer stuck on `streaming, 0 B` even though its
+      // bytes had already gone out on the wire.
       const updated: OutboundTransfer = { ...t, status: 'streaming' }
-      const nextOutbound = { ...outboundRef.current, [transferIdHex]: updated }
-      outboundRef.current = nextOutbound
-      setOutbound(nextOutbound)
+      outboundRef.current = { ...outboundRef.current, [transferIdHex]: updated }
+      setOutbound((prev) => markOutboundStreaming(prev, transferIdHex))
       // Capture immutable per-loop state. The bytes are pinned in the
       // outbound entry until status -> done, so reading them here
       // outside React state is safe.

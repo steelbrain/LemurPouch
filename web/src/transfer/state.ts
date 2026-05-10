@@ -136,6 +136,22 @@ export function finalizeBlobUrl(t: InboundTransfer): InboundTransfer {
   }
 }
 
+// markOutboundStreaming flips one transfer's status from
+// 'awaiting-decision' to 'streaming' and returns prev unchanged
+// otherwise. Designed for use as a setOutbound functional updater so
+// it composes with concurrent updates from other transfers' chunk
+// loops — a value-setter built from a pre-stream snapshot would clobber
+// any progress / 'done' updates that landed between the snapshot and
+// the commit, leaving the earlier transfer stuck on `streaming, 0 B`.
+export function markOutboundStreaming(
+  prev: Record<string, OutboundTransfer>,
+  transferIdHex: string,
+): Record<string, OutboundTransfer> {
+  const cur = prev[transferIdHex]
+  if (!cur || cur.status !== 'awaiting-decision') return prev
+  return { ...prev, [transferIdHex]: { ...cur, status: 'streaming' } }
+}
+
 // formatBytes renders a byte count like "1.4 MB". Rounded to 1 dp
 // for non-byte units; integer for raw bytes.
 export function formatBytes(n: number): string {

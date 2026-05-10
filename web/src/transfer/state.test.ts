@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import { sha256 } from '@noble/hashes/sha2.js'
 
-import { type InboundTransfer, finalizeBlobUrl, formatBytes, tryAssemble } from './state'
+import {
+  type InboundTransfer,
+  type OutboundTransfer,
+  finalizeBlobUrl,
+  formatBytes,
+  markOutboundStreaming,
+  tryAssemble,
+} from './state'
 
 function makeInbound(
   overrides: Partial<InboundTransfer> = {},
@@ -192,6 +199,134 @@ describe('finalizeBlobUrl', () => {
     }
     const out = finalizeBlobUrl(t)
     expect(out).toBe(t)
+  })
+})
+
+function makeOutbound(
+  overrides: Partial<OutboundTransfer> = {},
+): OutboundTransfer {
+  return {
+    transferIdHex: 'aa'.repeat(16),
+    peerHex: 'bb'.repeat(32),
+    filename: 'test.bin',
+    totalBytes: 100,
+    sentBytes: 0,
+    status: 'awaiting-decision',
+    bytes: new Uint8Array(100),
+    ...overrides,
+  }
+}
+
+describe('markOutboundStreaming', () => {
+  it('flips an awaiting-decision transfer to streaming', () => {
+    const a = makeOutbound({ transferIdHex: 'A' })
+    const next = markOutboundStreaming({ A: a }, 'A')
+    expect(next.A.status).toBe('streaming')
+    // Other fields preserved.
+    expect(next.A.bytes).toBe(a.bytes)
+    expect(next.A.totalBytes).toBe(a.totalBytes)
+  })
+
+  it('returns prev unchanged when the transfer is missing', () => {
+    const prev = { A: makeOutbound({ transferIdHex: 'A' }) }
+    expect(markOutboundStreaming(prev, 'B')).toBe(prev)
+  })
+
+  it('returns prev unchanged when the transfer is already streaming', () => {
+    const prev = {
+      A: makeOutbound({ transferIdHex: 'A', status: 'streaming', sentBytes: 50 }),
+    }
+    expect(markOutboundStreaming(prev, 'A')).toBe(prev)
+  })
+
+  it('returns prev unchanged when the transfer is already done / rejected / aborted', () => {
+    for (const status of ['done', 'rejected', 'aborted'] as const) {
+      const prev = { A: makeOutbound({ transferIdHex: 'A', status, bytes: null }) }
+      expect(markOutboundStreaming(prev, 'A')).toBe(prev)
+    }
+  })
+
+  // Regression: back-to-back transfer-accepts used to clobber an
+  // already-streamed transfer's `done` state because startStreaming
+  // wrote the React outbound map via a value setter built from a
+  // pre-stream snapshot of outboundRef.current. The functional
+  // updater this helper replaces must NOT touch other entries — every
+  // field of every other transfer (and its referential identity)
+  // must round-trip unchanged.
+  it('does not clobber other transfers that already finished streaming', () => {
+    const t1Done = makeOutbound({
+      transferIdHex: 'T1',
+      status: 'done',
+      sentBytes: 100,
+      bytes: null,
+    })
+    const t2Pending = makeOutbound({
+      transferIdHex: 'T2',
+      status: 'awaiting-decision',
+    })
+    const prev = { T1: t1Done, T2: t2Pending }
+
+    const next = markOutboundStreaming(prev, 'T2')
+
+    // T1's entry must be referentially identical — proves no spread,
+    // no field-level rewrite, no progress rollback.
+    expect(next.T1).toBe(t1Done)
+    expect(next.T1.status).toBe('done')
+    expect(next.T1.sentBytes).toBe(100)
+    // T2 transitioned cleanly.
+    expect(next.T2).not.toBe(t2Pending)
+    expect(next.T2.status).toBe('streaming')
+  })
+
+  // The setOutbound queue under React's batching looks like a sequence
+  // of value-setters and functional-updaters folded over the previous
+  // state. Replay the realistic queue that the App.tsx code path
+  // produces for two back-to-back accepts and verify that — with the
+  // functional updater — the earlier transfer's progress and final
+  // 'done' state survive the second transfer's startStreaming.
+  it('composes through a back-to-back-accepts queue without losing progress', () => {
+    const TOTAL = 100
+    const initial: Record<string, OutboundTransfer> = {
+      T1: makeOutbound({ transferIdHex: 'T1' }),
+      T2: makeOutbound({ transferIdHex: 'T2' }),
+    }
+
+    type Op =
+      | { kind: 'value'; value: Record<string, OutboundTransfer> }
+      | { kind: 'fn'; fn: (p: Record<string, OutboundTransfer>) => Record<string, OutboundTransfer> }
+
+    const queue: Op[] = [
+      // T1 startStreaming (the fixed call site — functional updater).
+      { kind: 'fn', fn: (p) => markOutboundStreaming(p, 'T1') },
+      // T1 streamChunks: progress to full + flip to done.
+      {
+        kind: 'fn',
+        fn: (p) => {
+          const c = p.T1
+          return { ...p, T1: { ...c, sentBytes: TOTAL } }
+        },
+      },
+      {
+        kind: 'fn',
+        fn: (p) => {
+          const c = p.T1
+          return { ...p, T1: { ...c, status: 'done', bytes: null } }
+        },
+      },
+      // T2 startStreaming arrives second. The functional updater here
+      // is the bug fix — a value-setter built from a stale snapshot
+      // {T1: streaming/0, T2: awaiting-decision} would clobber T1.
+      { kind: 'fn', fn: (p) => markOutboundStreaming(p, 'T2') },
+    ]
+
+    let state = initial
+    for (const op of queue) {
+      state = op.kind === 'value' ? op.value : op.fn(state)
+    }
+
+    expect(state.T1.status).toBe('done')
+    expect(state.T1.sentBytes).toBe(TOTAL)
+    expect(state.T2.status).toBe('streaming')
   })
 })
 
