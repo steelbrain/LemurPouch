@@ -199,6 +199,22 @@ jobs:
         shell: pwsh
         run: Copy-Item Dockerfile.windows docker-context\Dockerfile
 
+      # windows-2022 ships Docker installed but no longer auto-starts
+      # the daemon — without this, every docker invocation fails with
+      # "open //./pipe/docker_engine: The system cannot find the file
+      # specified." Start-Service is idempotent, and we wait for the
+      # named pipe because the service can report Running before
+      # docker_engine is actually accepting connections.
+      - name: Start Docker daemon
+        shell: pwsh
+        run: |
+          Start-Service docker
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not (Test-Path '\\.\pipe\docker_engine') -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 1
+          }
+          docker version
+
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
