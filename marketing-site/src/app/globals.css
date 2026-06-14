@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --background-elevated: #f9fafb;
+  --background-sunken: #f3f4f6;
+  --foreground: #111827;
+  --foreground-muted: #6b7280;
+  --foreground-subtle: #9ca3af;
+  --border: #e5e7eb;
+  --border-strong: #d1d5db;
+  --accent: #1d62e8;
+  /* `*-strong` flips polarity per theme: darker than base in light, lighter than base in dark.
+     Used for hover/active states where contrast against the same background must increase. */
+  --accent-strong: #1648b8;
+  --accent-soft: rgba(29, 98, 232, 0.08);
+  --pouch: #f2a04a;
+  --pouch-strong: #e07d1c;
+  --pouch-soft: rgba(242, 160, 74, 0.12);
+  --success: #0d8f70;
+  --success-soft: rgba(13, 143, 112, 0.1);
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.1);
+  --danger: #b91c1c;
+  --danger-soft: rgba(185, 28, 28, 0.08);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-background-elevated: var(--background-elevated);
+  --color-background-sunken: var(--background-sunken);
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-subtle: var(--foreground-subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-pouch: var(--pouch);
+  --color-pouch-strong: var(--pouch-strong);
+  --color-pouch-soft: var(--pouch-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Theming uses an explicit data-theme attribute on <html> when the user has
+   chosen a preference (set by the inline script in layout.tsx from a cookie).
+   When no attribute is present we fall back to the OS preference. */
+
+:root[data-theme="dark"] {
+  --background: #0f1117;
+  --background-elevated: #181a23;
+  --background-sunken: #0a0c11;
+  --foreground: #f1f5f9;
+  --foreground-muted: #94a3b8;
+  --foreground-subtle: #64748b;
+  --border: #2a2f3a;
+  --border-strong: #3a4150;
+  --accent: #6092f0;
+  --accent-strong: #8db0f5;
+  --accent-soft: rgba(96, 146, 240, 0.14);
+  --pouch: #f2a04a;
+  --pouch-strong: #f5b777;
+  --pouch-soft: rgba(242, 160, 74, 0.16);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.12);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.12);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --background: #0f1117;
+    --background-elevated: #181a23;
+    --background-sunken: #0a0c11;
+    --foreground: #f1f5f9;
+    --foreground-muted: #94a3b8;
+    --foreground-subtle: #64748b;
+    --border: #2a2f3a;
+    --border-strong: #3a4150;
+    --accent: #6092f0;
+    --accent-strong: #8db0f5;
+    --accent-soft: rgba(96, 146, 240, 0.14);
+    --pouch: #f2a04a;
+    --pouch-strong: #f5b777;
+    --pouch-soft: rgba(242, 160, 74, 0.16);
+    --success: #34d399;
+    --success-soft: rgba(52, 211, 153, 0.12);
+    --warning: #fbbf24;
+    --warning-soft: rgba(251, 191, 36, 0.12);
+    --danger: #f87171;
+    --danger-soft: rgba(248, 113, 113, 0.12);
+  }
+}
+
+.theme-icon-sun {
+  display: none;
+}
+.theme-icon-moon {
+  display: inline;
+}
+:root[data-theme="dark"] .theme-icon-sun {
+  display: inline;
+}
+:root[data-theme="dark"] .theme-icon-moon {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .theme-icon-sun {
+    display: inline;
+  }
+  :root:not([data-theme]) .theme-icon-moon {
+    display: none;
+  }
+}
+
+/* Belt-and-braces guard: any nested flex/grid item that doesn't shrink
+   below its intrinsic content (e.g. the unwrapped <pre> in TerminalMockup
+   or the long curl URL in InstallCommand) must not be allowed to widen
+   the document past the viewport on mobile. */
+html,
+body {
+  overflow-x: hidden;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+}
+
+.dot-grid {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    var(--border) 1px,
+    transparent 0
+  );
+  background-size: 24px 24px;
+}
+
+.hero-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse 60% 50% at 30% 20%,
+      var(--pouch-soft),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 50% 50% at 80% 70%,
+      var(--accent-soft),
+      transparent 60%
+    );
+}
+
+.scroll-mask-r {
+  mask-image: linear-gradient(to right, black 85%, transparent);
+}
