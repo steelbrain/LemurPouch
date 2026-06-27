@@ -28,12 +28,17 @@ The Protocol Reference appendix below is the source of truth for the protocol, t
 │   ├── build.sh           ← bundles frontend, then `go build` (cross-compile via GOOS/GOARCH)
 │   ├── install.sh         ← curl|sh installer: downloads latest release, verifies SHA256, exec's relay
 │   └── install.ps1        ← irm|iex installer for native Windows (mirrors install.sh)
-├── main.go                ← relay entry point (composes the parts in internal/)
+├── main.go                ← CLI entry: dispatch to --serve (relay) / --connect (TUI) / help
 ├── internal/
 │   ├── cryptoid/          ← Ed25519 + X25519 identity, BIP-39 fingerprint
 │   ├── wireproto/         ← cleartext JSON message types + binary envelope layout
-│   └── relay/             ← Hub, HandleWebSocket, friendship state machine,
-│                            envelope routing — the relay's behavior
+│   │                        + transfer-control (transfer.go) + file-chunk (chunk.go)
+│   ├── relay/             ← Hub, HandleWebSocket, friendship state machine,
+│   │                        envelope routing — the relay's behavior
+│   ├── client/            ← native Go protocol client: the browser-side half
+│   │                        (handshake, discovery, friendship keys, messenger,
+│   │                        transfer state machine), mirrored from web/src
+│   └── tui/               ← full-screen bubbletea terminal client over internal/client
 └── web/
     └── src/
         ├── crypto/        ← TS mirror of cryptoid + envelope wire + session keys + AEAD
@@ -249,7 +254,8 @@ File sharing across operating systems that works on the most restrictive network
 ### High-Level Architecture
 
 - **Relay server**: a single deployable that runs on the LAN. Serves a static website over HTTP and exposes a WebSocket endpoint for clients. Enforces all consent gates and rate limits. After friendship is established, the relay forwards opaque ciphertext envelopes it cannot read.
-- **Browser clients**: each device opens the relay's URL. In v0 the page *is* the daemon — there is no native client.
+- **Browser clients**: each device opens the relay's URL; the page *is* the daemon. This is still the default client.
+- **Native TUI client** (`internal/client` + `internal/tui`, launched via `lemur-pouch --connect URL`): a full-screen terminal client that speaks the identical protocol with far less memory/CPU than the browser. `internal/client` is a Go mirror of the `web/src` client logic; any wire-format change must update both. It is not a background daemon — it runs only while the TUI is open, and identity is still session-scoped.
 - **Transport**: outbound WebSocket from each client to the relay. JSON for unencrypted control messages; binary frames for encrypted peer-to-peer payloads.
 
 ### Identity
@@ -604,4 +610,4 @@ The following are not yet decided and need a separate pass:
 
 - **Resumable transfers** — out of scope for v0; revisit if needed.
 - **TLS** — out of scope for v0 since the relay is LAN-only; revisit when the project grows beyond LAN.
-- **Native daemons** — out of scope for v0; the page is the daemon. Native clients become relevant once we want background presence and OS integration.
+- **Native background daemons** — a native *interactive* client now exists (the `--connect` TUI, see "High-Level Architecture"), but a headless/background daemon with OS integration and presence remains out of scope for v0.

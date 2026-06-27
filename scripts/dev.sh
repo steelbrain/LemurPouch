@@ -53,7 +53,7 @@ prefix() {
 
 echo "[dev] starting relay (:8080) and vite (:5173). Ctrl-C to stop."
 
-(go run . 2>&1 | prefix "relay") &
+(go run . --serve 2>&1 | prefix "relay") &
 RELAY_SUBSHELL=$!
 (cd web && npm run dev 2>&1 | prefix "vite") &
 VITE_SUBSHELL=$!

@@ -26,9 +26,11 @@ $osArch = switch -Regex ($rawArch) {
 $Asset    = "lemur-pouch-windows-$osArch.zip"
 $BaseUrl  = "https://github.com/$Repo/releases/latest/download"
 
-# --- Install location (LOCALAPPDATA = per-user, no admin needed) ------------
+# --- Install location (~/.local/bin = per-user, no admin needed) ------------
+#
+# Mirrors the Unix installer: ~/.local/bin under the user's home directory.
 
-$InstallDir = Join-Path $env:LOCALAPPDATA 'lemur-pouch'
+$InstallDir = Join-Path $HOME '.local\bin'
 $BinPath    = Join-Path $InstallDir $BinaryName
 
 # --- Download + extract -----------------------------------------------------
@@ -83,8 +85,12 @@ if ((Test-Path -LiteralPath $BinPath) -and -not $env:LP_FORCE) {
 Write-Host ''
 Write-Host "Installed at: $BinPath"
 Write-Host ''
-Write-Host 'Starting LemurPouch (Ctrl-C to stop)...'
+Write-Host 'Starting the LemurPouch relay (Ctrl-C to stop)...'
+Write-Host "To connect a TUI client instead, run: $BinPath --connect <relay-url>"
 Write-Host ''
 
-& $BinPath @args
+# Default to running the relay server (the installer's purpose). A bare
+# `lemur-pouch` now prints help, so pass --serve explicitly; any extra args
+# (e.g. --listen 0.0.0.0:9000) are forwarded after it.
+& $BinPath --serve @args
 exit $LASTEXITCODE

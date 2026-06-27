@@ -48,13 +48,7 @@ The full protocol, threat model, and wire format live in the [Protocol Reference
 
 ### One-line install
 
-The binary lives at:
-
-| Platform | Path                                                         |
-|----------|--------------------------------------------------------------|
-| Linux    | `${XDG_DATA_HOME:-$HOME/.local/share}/lemur-pouch/lemur-pouch` |
-| macOS    | `~/Library/Application Support/lemur-pouch/lemur-pouch`      |
-| Windows  | `%LOCALAPPDATA%\lemur-pouch\lemur-pouch.exe`                 |
+The binary is installed to `~/.local/bin` on every platform (`~/.local/bin/lemur-pouch`, or `lemur-pouch.exe` on Windows) — the XDG convention for user executables, usually already on `PATH`. The installer then starts the relay (`--serve`).
 
 Re-running the script is idempotent — the download is skipped if the binary is already there. Set `LP_FORCE=1` (or `$env:LP_FORCE='1'`) to overwrite.
 
@@ -94,7 +88,7 @@ Each tagged release publishes a static binary for every common platform on the [
 | Windows amd64 | `lemur-pouch-windows-amd64.zip`      |
 | Windows arm64 | `lemur-pouch-windows-arm64.zip`      |
 
-Verify a download with `sha256sum --ignore-missing -c SHA256SUMS` (or `shasum -a 256 --ignore-missing -c` on macOS) against the `SHA256SUMS` file from the same release — `--ignore-missing` skips entries for archives you didn't download. Then unpack and run `./lemur-pouch` (`lemur-pouch.exe` on Windows).
+Verify a download with `sha256sum --ignore-missing -c SHA256SUMS` (or `shasum -a 256 --ignore-missing -c` on macOS) against the `SHA256SUMS` file from the same release — `--ignore-missing` skips entries for archives you didn't download. Then unpack and run `./lemur-pouch --serve` (`lemur-pouch.exe --serve` on Windows).
 
 ### From source
 
@@ -102,7 +96,7 @@ Requirements: Go 1.25+, Node 24+, npm.
 
 ```sh
 ./scripts/build.sh        # bundle frontend + compile relay → ./lemur-pouch
-./lemur-pouch             # listens on :8080 by default
+./lemur-pouch --serve     # relay on :8080 by default
 ```
 
 `build.sh` forwards positional args to `go build`, so cross-compiling is straightforward:
@@ -116,12 +110,23 @@ GOOS=windows GOARCH=amd64 ./scripts/build.sh -o lemur-pouch-windows-amd64.exe
 ### Bind address
 
 ```sh
-./lemur-pouch --listen :8080             # all interfaces (default)
-./lemur-pouch --listen 127.0.0.1:8080    # localhost only
-./lemur-pouch --listen 192.168.1.5:80    # one specific NIC
+./lemur-pouch --serve --listen :8080             # all interfaces (default)
+./lemur-pouch --serve --listen 127.0.0.1:8080    # localhost only
+./lemur-pouch --serve --listen 192.168.1.5:80    # one specific NIC
 ```
 
 On startup the relay enumerates and prints every URL it's reachable at, so you can paste one into a chat without digging through `ifconfig`.
+
+### Native TUI client (no browser)
+
+The browser is the default client, but every byte of a transfer also flows through a React app — which is memory- and CPU-hungry for large files. The binary doubles as a native full-screen terminal client that speaks the same protocol with a fraction of the overhead:
+
+```sh
+lemur-pouch --connect http://192.168.1.5:8080/   # connect to a relay
+lemur-pouch --connect http://192.168.1.5:8080/ --out ~/Downloads
+```
+
+`--connect` accepts the relay URL the `--serve` banner prints (http/https or ws/wss; the `/ws` path is added for you). `--out` is where received files land (default: the current directory). Inside the TUI: `↑/↓` move, `c` connect to a peer, `s` send a file (you type a path), `a`/`r` accept or reject an incoming file, `q` quit. Peers are identified by the same six-word fingerprint — verify it out of band before connecting, exactly as in the browser. A bare `lemur-pouch` with no flags prints the full help.
 
 ## Troubleshooting
 
@@ -147,7 +152,7 @@ Runs the Go relay on `:8080` and Vite on `:5173` with HMR. Vite proxies `/ws` to
 Manual equivalents:
 
 ```sh
-go run .                    # relay on :8080
+go run . --serve            # relay on :8080
 cd web && npm install       # first time only
 cd web && npm run dev       # vite on :5173
 ```
@@ -172,11 +177,13 @@ The relay is heavily concurrent — always run Go tests under `-race`.
 ```
 .
 ├── AGENTS.md              ← agent conventions + Protocol Reference appendix (the deep dive)
-├── main.go                ← relay entry point
+├── main.go                ← CLI entry point: --serve (relay), --connect (TUI), help
 ├── internal/
 │   ├── cryptoid/          ← Ed25519 + X25519 identity, BIP-39 fingerprint
-│   ├── wireproto/         ← cleartext JSON message types + binary envelope layout
-│   └── relay/             ← Hub, friendship state machine, envelope routing
+│   ├── wireproto/         ← cleartext JSON + binary envelope + transfer/chunk layouts
+│   ├── relay/             ← Hub, friendship state machine, envelope routing
+│   ├── client/            ← native protocol client (Go mirror of web/src)
+│   └── tui/               ← full-screen terminal client over internal/client
 └── web/
     └── src/
         ├── crypto/        ← TS mirror of cryptoid + envelope wire + AEAD + HKDF

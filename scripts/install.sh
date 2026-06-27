@@ -28,22 +28,13 @@ case "$(uname -m)" in
 esac
 asset="lemur-pouch-${os}-${arch}.${archive_ext}"
 
-# --- Install location (per-OS conventional data dir) ------------------------
+# --- Install location -------------------------------------------------------
+#
+# ~/.local/bin is the XDG convention for user-installed executables and is on
+# PATH in most modern shells, so the binary is runnable as `lemur-pouch`
+# afterward (on every OS — macOS no longer hides it under Application Support).
 
-case "$os" in
-    linux)
-        install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/lemur-pouch"
-        ;;
-    darwin)
-        install_dir="$HOME/Library/Application Support/lemur-pouch"
-        ;;
-    windows)
-        # MSYS / Git Bash exposes LOCALAPPDATA in the env. Fallback for
-        # stripped-down environments.
-        install_dir="${LOCALAPPDATA:-$HOME/AppData/Local}/lemur-pouch"
-        ;;
-esac
-
+install_dir="$HOME/.local/bin"
 bin_path="$install_dir/$BINARY_NAME"
 
 # --- Download + extract -----------------------------------------------------
@@ -122,7 +113,11 @@ fi
 echo ""
 echo "Installed at: $bin_path"
 echo ""
-echo "Starting LemurPouch (Ctrl-C to stop)..."
+echo "Starting the LemurPouch relay (Ctrl-C to stop)..."
+echo "To connect a TUI client instead, run: $bin_path --connect <relay-url>"
 echo ""
 
-exec "$bin_path" "$@"
+# Default to running the relay server (the installer's purpose). A bare
+# `lemur-pouch` now prints help, so pass --serve explicitly; any extra args
+# (e.g. --listen 0.0.0.0:9000) are forwarded after it.
+exec "$bin_path" --serve "$@"
