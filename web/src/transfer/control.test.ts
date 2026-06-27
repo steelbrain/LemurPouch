@@ -24,13 +24,12 @@ const sampleSha256 = new Uint8Array(32).fill(0x88)
 
 describe('build + parse round-trips', () => {
   it('transfer-offer', () => {
-    const json = buildTransferOffer(sampleTransferId, 'photo.jpg', 1_048_576, sampleSha256)
+    const json = buildTransferOffer(sampleTransferId, 'photo.jpg', 1_048_576)
     const msg = parseTransferOffer(json)
     expect(msg.type).toBe(TYPE_TRANSFER_OFFER)
     expect(Array.from(msg.transferId)).toEqual(Array.from(sampleTransferId))
     expect(msg.filename).toBe('photo.jpg')
     expect(msg.size).toBe(1_048_576)
-    expect(Array.from(msg.sha256)).toEqual(Array.from(sampleSha256))
   })
 
   it('transfer-accept', () => {
@@ -56,10 +55,11 @@ describe('build + parse round-trips', () => {
   })
 
   it('transfer-end', () => {
-    const json = buildTransferEnd(sampleTransferId)
+    const json = buildTransferEnd(sampleTransferId, sampleSha256)
     const msg = parseTransferEnd(json)
     expect(msg.type).toBe(TYPE_TRANSFER_END)
     expect(Array.from(msg.transferId)).toEqual(Array.from(sampleTransferId))
+    expect(Array.from(msg.sha256)).toEqual(Array.from(sampleSha256))
   })
 })
 
@@ -67,21 +67,27 @@ describe('JSON field-name pinning', () => {
   // Pin the snake_case field names. Drift here silently breaks Go-TS
   // interop — same role as the FriendshipJSONFieldNames pinning test
   // in wire.test.ts.
-  it('transfer-offer uses transfer_id, filename, size, sha256', () => {
-    const json = buildTransferOffer(sampleTransferId, 'a', 1, sampleSha256)
+  it('transfer-offer uses transfer_id, filename, size', () => {
+    const json = buildTransferOffer(sampleTransferId, 'a', 1)
     const obj = JSON.parse(json) as Record<string, unknown>
     expect(obj.type).toBe(TYPE_TRANSFER_OFFER)
     expect(typeof obj.transfer_id).toBe('string')
     expect(typeof obj.filename).toBe('string')
     expect(typeof obj.size).toBe('number')
-    expect(typeof obj.sha256).toBe('string')
     expect(Object.keys(obj).sort()).toEqual([
       'filename',
-      'sha256',
       'size',
       'transfer_id',
       'type',
     ])
+  })
+
+  it('transfer-end uses transfer_id, sha256', () => {
+    const obj = JSON.parse(buildTransferEnd(sampleTransferId, sampleSha256)) as Record<string, unknown>
+    expect(obj.type).toBe(TYPE_TRANSFER_END)
+    expect(typeof obj.transfer_id).toBe('string')
+    expect(typeof obj.sha256).toBe('string')
+    expect(Object.keys(obj).sort()).toEqual(['sha256', 'transfer_id', 'type'])
   })
 
   it('transfer-accept uses transfer_id only', () => {
@@ -97,12 +103,10 @@ describe('JSON field-name pinning', () => {
 
 describe('build helpers reject bad inputs', () => {
   it.each([
-    ['short transfer_id', new Uint8Array(15), sampleSha256, /transfer_id must be 16 bytes/],
-    ['long transfer_id', new Uint8Array(17), sampleSha256, /transfer_id must be 16 bytes/],
-    ['short sha256', sampleTransferId, new Uint8Array(31), /sha256 must be 32 bytes/],
-    ['long sha256', sampleTransferId, new Uint8Array(33), /sha256 must be 32 bytes/],
-  ])('transfer-offer: %s', (_name, tid, sha, msg) => {
-    expect(() => buildTransferOffer(tid, 'f', 1, sha)).toThrow(msg)
+    ['short transfer_id', new Uint8Array(15), /transfer_id must be 16 bytes/],
+    ['long transfer_id', new Uint8Array(17), /transfer_id must be 16 bytes/],
+  ])('transfer-offer: %s', (_name, tid, msg) => {
+    expect(() => buildTransferOffer(tid, 'f', 1)).toThrow(msg)
   })
 
   it.each<[string, number]>([
@@ -111,9 +115,18 @@ describe('build helpers reject bad inputs', () => {
     ['NaN', Number.NaN],
     ['+Infinity', Number.POSITIVE_INFINITY],
   ])('transfer-offer: rejects size = %s', (_name, size) => {
-    expect(() => buildTransferOffer(sampleTransferId, 'f', size, sampleSha256)).toThrow(
+    expect(() => buildTransferOffer(sampleTransferId, 'f', size)).toThrow(
       /size must be a non-negative integer/,
     )
+  })
+
+  it.each([
+    ['short transfer_id', new Uint8Array(15), sampleSha256, /transfer_id must be 16 bytes/],
+    ['long transfer_id', new Uint8Array(17), sampleSha256, /transfer_id must be 16 bytes/],
+    ['short sha256', sampleTransferId, new Uint8Array(31), /sha256 must be 32 bytes/],
+    ['long sha256', sampleTransferId, new Uint8Array(33), /sha256 must be 32 bytes/],
+  ])('transfer-end: %s', (_name, tid, sha, msg) => {
+    expect(() => buildTransferEnd(tid, sha)).toThrow(msg)
   })
 
   it('transfer-accept rejects wrong-size transfer_id', () => {
@@ -126,7 +139,7 @@ describe('build helpers reject bad inputs', () => {
   })
 
   it('transfer-end rejects wrong-size transfer_id', () => {
-    expect(() => buildTransferEnd(new Uint8Array(15))).toThrow(WireProtocolError)
+    expect(() => buildTransferEnd(new Uint8Array(15), sampleSha256)).toThrow(WireProtocolError)
   })
 })
 
@@ -137,6 +150,14 @@ describe('parsers reject bad inputs', () => {
       transfer_id: bytesToBase64(sampleTransferId),
       filename: 'photo.jpg',
       size: 1024,
+      ...overrides,
+    })
+  }
+
+  function endJson(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      type: TYPE_TRANSFER_END,
+      transfer_id: bytesToBase64(sampleTransferId),
       sha256: bytesToBase64(sampleSha256),
       ...overrides,
     })
@@ -159,11 +180,19 @@ describe('parsers reject bad inputs', () => {
     )
   })
 
-  it('rejects truncated sha256', () => {
+  it('rejects transfer-end with truncated sha256', () => {
     const shortHash = new Uint8Array(20).fill(0xab)
-    expect(() => parseTransferOffer(offerJson({ sha256: bytesToBase64(shortHash) }))).toThrow(
+    expect(() => parseTransferEnd(endJson({ sha256: bytesToBase64(shortHash) }))).toThrow(
       /sha256.*must decode to 32 bytes/,
     )
+  })
+
+  it('rejects transfer-end with missing sha256', () => {
+    const obj = {
+      type: TYPE_TRANSFER_END,
+      transfer_id: bytesToBase64(sampleTransferId),
+    }
+    expect(() => parseTransferEnd(JSON.stringify(obj))).toThrow(/sha256/)
   })
 
   it('rejects missing filename', () => {
@@ -171,7 +200,6 @@ describe('parsers reject bad inputs', () => {
       type: TYPE_TRANSFER_OFFER,
       transfer_id: bytesToBase64(sampleTransferId),
       size: 1,
-      sha256: bytesToBase64(sampleSha256),
     }
     expect(() => parseTransferOffer(JSON.stringify(obj))).toThrow(/filename/)
   })
@@ -218,13 +246,13 @@ describe('parseTransferControl dispatcher', () => {
       // succeeds inside the dispatcher.
       let json: string
       if (typ === TYPE_TRANSFER_OFFER) {
-        json = buildTransferOffer(sampleTransferId, 'f', 1, sampleSha256)
+        json = buildTransferOffer(sampleTransferId, 'f', 1)
       } else if (typ === TYPE_TRANSFER_ACCEPT) {
         json = buildTransferAccept(sampleTransferId)
       } else if (typ === TYPE_TRANSFER_REJECT) {
         json = buildTransferReject(sampleTransferId)
       } else {
-        json = buildTransferEnd(sampleTransferId)
+        json = buildTransferEnd(sampleTransferId, sampleSha256)
       }
       const msg = parseTransferControl(json)
       expect(msg?.type).toBe(typ)
@@ -247,7 +275,7 @@ describe('parseTransferControl dispatcher', () => {
     const broken = JSON.stringify({
       type: TYPE_TRANSFER_OFFER,
       transfer_id: bytesToBase64(sampleTransferId),
-      // missing filename + size + sha256
+      // missing filename + size
     })
     expect(() => parseTransferControl(broken)).toThrow(WireProtocolError)
   })
@@ -255,7 +283,13 @@ describe('parseTransferControl dispatcher', () => {
 
 describe('base64 encoding compatibility with Go side', () => {
   it('transfer-offer round-trips through base64ToBytes', () => {
-    const json = buildTransferOffer(sampleTransferId, 'f', 1, sampleSha256)
+    const json = buildTransferOffer(sampleTransferId, 'f', 1)
+    const obj = JSON.parse(json) as Record<string, unknown>
+    expect(base64ToBytes(obj.transfer_id as string).length).toBe(TRANSFER_ID_LEN)
+  })
+
+  it('transfer-end round-trips through base64ToBytes', () => {
+    const json = buildTransferEnd(sampleTransferId, sampleSha256)
     const obj = JSON.parse(json) as Record<string, unknown>
     expect(base64ToBytes(obj.transfer_id as string).length).toBe(TRANSFER_ID_LEN)
     expect(base64ToBytes(obj.sha256 as string).length).toBe(32)

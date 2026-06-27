@@ -548,14 +548,22 @@ The plaintext is interpreted based on the leading inner-type byte:
   "type":        "transfer-offer",
   "transfer_id": "<base64-16>",
   "filename":    "...",
-  "size":        <bytes>,
-  "sha256":      "<base64-32>"
+  "size":        <bytes>
 }
 
 { "type": "transfer-accept", "transfer_id": "<base64-16>" }
 { "type": "transfer-reject", "transfer_id": "<base64-16>", "reason": "<optional>" }
-{ "type": "transfer-end",    "transfer_id": "<base64-16>" }
+{ "type": "transfer-end",    "transfer_id": "<base64-16>", "sha256": "<base64-32>" }
 ```
+
+The `sha256` rides on `transfer-end`, not `transfer-offer`: both peers hash
+the payload incrementally as it streams (sender as it sends, recipient as it
+receives), so the digest only exists once the last chunk has gone out. This
+lets the sender ship the offer without first reading and hashing the whole
+file, and lets the recipient verify with a cheap `digest()` finalize the
+moment the last byte lands instead of a second full pass over the assembled
+bytes. The check is still end-to-end integrity only — per-chunk Poly1305
+already authenticates each frame against a tampering relay.
 
 ##### Inner type `0x02` — file chunk (binary)
 
@@ -573,8 +581,8 @@ The receiver writes chunks in `seq` order, buffering out-of-order arrivals. Mult
 1. Sender mints `transfer_id = random(16 bytes)`.
 2. Sender sends `transfer-offer` (inner 0x01) inside an encrypted envelope.
 3. Recipient sends `transfer-accept` or `transfer-reject` (inner 0x01).
-4. On accept: sender streams chunks (inner 0x02) with monotonic `seq` from 0; the chunk with `flags & 1` is the last.
-5. Sender sends `transfer-end` (inner 0x01) after the last chunk.
+4. On accept: sender streams chunks (inner 0x02) with monotonic `seq` from 0, folding each chunk into a running SHA-256; the chunk with `flags & 1` is the last.
+5. Sender sends `transfer-end` (inner 0x01), carrying the finalized SHA-256, after the last chunk. The recipient compares it against its own incremental digest of the received bytes.
 6. If the connection drops or the recipient detects gaps, the partial file is discarded.
 
 #### What the Relay Enforces

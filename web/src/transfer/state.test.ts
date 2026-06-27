@@ -2,161 +2,203 @@ import { describe, expect, it } from 'vitest'
 
 import { sha256 } from '@noble/hashes/sha2.js'
 
+import { CHUNK_FLAG_LAST } from './chunk'
 import {
+  CHUNK_DATA_SIZE,
   type InboundTransfer,
   type OutboundTransfer,
+  acceptChunk,
   finalizeBlobUrl,
   formatBytes,
+  inboundVerdict,
   markOutboundStreaming,
-  tryAssemble,
+  newInboundAssembler,
 } from './state'
 
-function makeInbound(
-  overrides: Partial<InboundTransfer> = {},
-): InboundTransfer {
-  return {
-    transferIdHex: 'aa'.repeat(16),
-    peerHex: 'bb'.repeat(32),
-    filename: 'test.bin',
-    totalBytes: 0,
-    expectedSha256: sha256(new Uint8Array(0)),
-    receivedBytes: 0,
-    chunks: new Map(),
-    lastSeq: null,
-    status: 'streaming',
-    ...overrides,
-  }
+// Non-last chunks on the wire are always exactly CHUNK_DATA_SIZE (the
+// sender's chunker emits that), and the receiver bounds seq against
+// ceil(totalBytes / CHUNK_DATA_SIZE). Tests that exercise more than one
+// chunk must therefore make every non-last chunk full-size, or the seq
+// bound rejects seq>=1. `fullChunk` + `tailChunk` keep that honest.
+function fullChunk(fill: number): Uint8Array {
+  return new Uint8Array(CHUNK_DATA_SIZE).fill(fill)
 }
-
-// inboundFromChunks builds an InboundTransfer whose totalBytes and
-// expectedSha256 are derived from the chunks, so the hash/size checks
-// in tryAssemble are exercised on data the test actually controls.
-function inboundFromChunks(
-  ordered: Uint8Array[],
-  overrides: Partial<InboundTransfer> = {},
-): InboundTransfer {
-  const totalLen = ordered.reduce((s, c) => s + c.length, 0)
-  const flat = new Uint8Array(totalLen)
+function tailChunk(len: number, fill: number): Uint8Array {
+  return new Uint8Array(len).fill(fill)
+}
+function concat(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((s, p) => s + p.length, 0)
+  const out = new Uint8Array(total)
   let off = 0
-  for (const c of ordered) {
-    flat.set(c, off)
-    off += c.length
+  for (const p of parts) {
+    out.set(p, off)
+    off += p.length
   }
-  return makeInbound({
-    totalBytes: totalLen,
-    expectedSha256: sha256(flat),
-    receivedBytes: totalLen,
-    ...overrides,
-  })
+  return out
 }
 
-describe('tryAssemble', () => {
-  it('returns input unchanged when lastSeq is null', () => {
-    const t = makeInbound({
-      chunks: new Map([
-        [0, new Uint8Array([0x10])],
-        [1, new Uint8Array([0x20])],
-      ]),
-      receivedBytes: 2,
-    })
-    const out = tryAssemble(t)
-    expect(out).toBe(t)
-    expect(out.status).toBe('streaming')
+describe('newInboundAssembler', () => {
+  it('preallocates the buffer and seeds bookkeeping', () => {
+    const a = newInboundAssembler(100)
+    expect(a.buf.length).toBe(100)
+    expect(a.writeOffset).toBe(0)
+    expect(a.nextSeq).toBe(0)
+    expect(a.receivedBytes).toBe(0)
+    expect(a.lastSeq).toBeNull()
+    expect(a.digest).toBeNull()
+    expect(a.expectedSha256).toBeNull()
+    // ceil(100 / 65536) = 1.
+    expect(a.expectedChunks).toBe(1)
   })
 
-  it('returns input unchanged when there is a gap below lastSeq', () => {
-    const t = makeInbound({
-      chunks: new Map([
-        [0, new Uint8Array([0x10])],
-        // missing seq 1
-        [2, new Uint8Array([0x30])],
-      ]),
-      lastSeq: 2,
-      receivedBytes: 2,
-    })
-    const out = tryAssemble(t)
-    expect(out).toBe(t)
-    expect(out.status).toBe('streaming')
+  it('floors expectedChunks at 1 for a 0-byte transfer', () => {
+    expect(newInboundAssembler(0).expectedChunks).toBe(1)
   })
 
-  it('assembles when all chunks 0..lastSeq are present', () => {
-    const c0 = new Uint8Array([0x01, 0x02])
-    const c1 = new Uint8Array([0x03, 0x04, 0x05])
-    const c2 = new Uint8Array([0x06])
-    const t = inboundFromChunks([c0, c1, c2], {
-      chunks: new Map([[0, c0], [1, c1], [2, c2]]),
-      lastSeq: 2,
-    })
-    const out = tryAssemble(t)
-    expect(out.status).toBe('done')
-    expect(out.blobUrl).toBeUndefined() // tryAssemble is pure; URL minted post-commit
-    expect(out.assembledBytes).toBeDefined()
-    expect(out.chunks.size).toBe(0) // memory freed
-    expect(Array.from(out.assembledBytes!)).toEqual([0x01, 0x02, 0x03, 0x04, 0x05, 0x06])
+  it('computes expectedChunks for a multi-chunk transfer', () => {
+    const a = newInboundAssembler(CHUNK_DATA_SIZE * 2 + 5)
+    expect(a.expectedChunks).toBe(3)
+  })
+})
+
+describe('acceptChunk — happy paths', () => {
+  it('assembles a single-chunk transfer and finalizes the digest', () => {
+    const c0 = tailChunk(6, 0x42)
+    const a = newInboundAssembler(6)
+    expect(acceptChunk(a, 0, CHUNK_FLAG_LAST, c0)).toBe('accepted')
+    expect(a.receivedBytes).toBe(6)
+    expect(Array.from(a.buf)).toEqual(Array.from(c0))
+    // digest is finalized as soon as the last contiguous byte lands.
+    expect(a.digest).not.toBeNull()
+    expect(Array.from(a.digest!)).toEqual(Array.from(sha256(c0)))
   })
 
-  it('respects sequence order during assembly (out-of-order arrivals)', () => {
-    // Insert chunks in arbitrary order; tryAssemble must walk 0..lastSeq
-    // to concat them in the correct order.
-    const c0 = new Uint8Array([0x01, 0x02])
-    const c1 = new Uint8Array([0x03, 0x04, 0x05])
-    const c2 = new Uint8Array([0x06])
-    const t = inboundFromChunks([c0, c1, c2], {
-      chunks: new Map([[2, c2], [0, c0], [1, c1]]),
-      lastSeq: 2,
-    })
-    const out = tryAssemble(t)
-    expect(out.status).toBe('done')
-    expect(Array.from(out.assembledBytes!)).toEqual([0x01, 0x02, 0x03, 0x04, 0x05, 0x06])
+  it('assembles a zero-byte transfer (single empty last chunk)', () => {
+    const a = newInboundAssembler(0)
+    expect(acceptChunk(a, 0, CHUNK_FLAG_LAST, new Uint8Array(0))).toBe('accepted')
+    expect(a.buf.length).toBe(0)
+    expect(Array.from(a.digest!)).toEqual(Array.from(sha256(new Uint8Array(0))))
   })
 
-  it('handles a single-chunk transfer (lastSeq=0)', () => {
-    const c0 = new Uint8Array([0x99])
-    const t = inboundFromChunks([c0], {
-      chunks: new Map([[0, c0]]),
-      lastSeq: 0,
-    })
-    const out = tryAssemble(t)
-    expect(out.status).toBe('done')
-    expect(Array.from(out.assembledBytes!)).toEqual([0x99])
+  it('assembles multiple chunks in order', () => {
+    const c0 = fullChunk(0xaa)
+    const c1 = tailChunk(10, 0xbb)
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    expect(acceptChunk(a, 0, 0, c0)).toBe('accepted')
+    // Digest not ready until the last chunk lands.
+    expect(a.digest).toBeNull()
+    expect(acceptChunk(a, 1, CHUNK_FLAG_LAST, c1)).toBe('accepted')
+    expect(Array.from(a.buf)).toEqual(Array.from(concat([c0, c1])))
+    expect(Array.from(a.digest!)).toEqual(Array.from(sha256(concat([c0, c1]))))
   })
 
-  it('handles a zero-data last-chunk-only transfer', () => {
-    // Edge case: a sender shipping a 0-byte file with a single empty
-    // chunk that just sets the last-flag.
-    const t = inboundFromChunks([new Uint8Array(0)], {
-      chunks: new Map([[0, new Uint8Array(0)]]),
-      lastSeq: 0,
-    })
-    const out = tryAssemble(t)
-    expect(out.status).toBe('done')
-    expect(out.assembledBytes!.length).toBe(0)
+  it('tolerates out-of-order arrival via the reorder buffer', () => {
+    const c0 = fullChunk(0xaa)
+    const c1 = tailChunk(10, 0xbb)
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    // Last chunk arrives first — stashed in pending, hash not advanced.
+    expect(acceptChunk(a, 1, CHUNK_FLAG_LAST, c1)).toBe('accepted')
+    expect(a.pending.size).toBe(1)
+    expect(a.nextSeq).toBe(0)
+    expect(a.digest).toBeNull()
+    // The gap fills — seq 0 writes, then seq 1 drains contiguously.
+    expect(acceptChunk(a, 0, 0, c0)).toBe('accepted')
+    expect(a.pending.size).toBe(0)
+    expect(Array.from(a.buf)).toEqual(Array.from(concat([c0, c1])))
+    expect(Array.from(a.digest!)).toEqual(Array.from(sha256(concat([c0, c1]))))
   })
 
-  it('aborts when assembled length differs from advertised totalBytes', () => {
-    const c0 = new Uint8Array([0x10, 0x11, 0x12])
-    const t = inboundFromChunks([c0], {
-      chunks: new Map([[0, c0]]),
-      lastSeq: 0,
-      totalBytes: 5, // sender advertised more than actually arrived
-    })
-    const out = tryAssemble(t)
-    expect(out.status).toBe('aborted')
-    expect(out.assembledBytes).toBeUndefined()
-    expect(out.chunks.size).toBe(0)
+  it('copies out-of-order chunk data (no aliasing of the frame buffer)', () => {
+    const c1 = tailChunk(10, 0xbb)
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    acceptChunk(a, 1, CHUNK_FLAG_LAST, c1)
+    // Mutate the caller's buffer after stashing; the assembler must hold
+    // its own copy.
+    c1.fill(0x00)
+    acceptChunk(a, 0, 0, fullChunk(0xaa))
+    expect(a.buf[CHUNK_DATA_SIZE]).toBe(0xbb)
+  })
+})
+
+describe('acceptChunk — duplicates and rejections', () => {
+  it('reports a re-sent seq as duplicate without mutating', () => {
+    const c0 = fullChunk(0xaa)
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    expect(acceptChunk(a, 0, 0, c0)).toBe('accepted')
+    const receivedBefore = a.receivedBytes
+    expect(acceptChunk(a, 0, 0, fullChunk(0x99))).toBe('duplicate')
+    expect(a.receivedBytes).toBe(receivedBefore)
+    // The original bytes are untouched.
+    expect(a.buf[0]).toBe(0xaa)
   })
 
-  it('aborts when assembled bytes hash to a different SHA-256 than advertised', () => {
-    const c0 = new Uint8Array([0xAA, 0xBB])
-    const t = inboundFromChunks([c0], {
-      chunks: new Map([[0, c0]]),
-      lastSeq: 0,
-      // Override expectedSha256 with a wrong digest.
-      expectedSha256: new Uint8Array(32).fill(0xFF),
-    })
-    const out = tryAssemble(t)
-    expect(out.status).toBe('aborted')
-    expect(out.assembledBytes).toBeUndefined()
+  it('reports an already-buffered out-of-order seq as duplicate', () => {
+    const a = newInboundAssembler(CHUNK_DATA_SIZE * 2 + 1)
+    expect(acceptChunk(a, 1, 0, fullChunk(0xbb))).toBe('accepted')
+    expect(acceptChunk(a, 1, 0, fullChunk(0xcc))).toBe('duplicate')
+  })
+
+  it('aborts on a seq at/above expectedChunks', () => {
+    const a = newInboundAssembler(6) // expectedChunks = 1
+    expect(acceptChunk(a, 1, CHUNK_FLAG_LAST, tailChunk(1, 0x01))).toBe('abort')
+  })
+
+  it('aborts on a hostile huge seq', () => {
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    expect(acceptChunk(a, 0xffffffff, CHUNK_FLAG_LAST, tailChunk(1, 0x01))).toBe('abort')
+  })
+
+  it('aborts on an empty non-last chunk', () => {
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    expect(acceptChunk(a, 0, 0, new Uint8Array(0))).toBe('abort')
+  })
+
+  it('aborts when the stream overshoots the advertised size', () => {
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    expect(acceptChunk(a, 0, 0, fullChunk(0xaa))).toBe('accepted')
+    // remaining budget is 10; a 20-byte last chunk overshoots.
+    expect(acceptChunk(a, 1, CHUNK_FLAG_LAST, tailChunk(20, 0xbb))).toBe('abort')
+  })
+
+  it('aborts when the stream is shorter than the advertised size', () => {
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    expect(acceptChunk(a, 0, 0, fullChunk(0xaa))).toBe('accepted')
+    // Last chunk is short of the 10 advertised tail bytes — size mismatch.
+    expect(acceptChunk(a, 1, CHUNK_FLAG_LAST, tailChunk(5, 0xbb))).toBe('abort')
+  })
+})
+
+describe('inboundVerdict', () => {
+  function completed(): ReturnType<typeof newInboundAssembler> {
+    const c0 = tailChunk(6, 0x42)
+    const a = newInboundAssembler(6)
+    acceptChunk(a, 0, CHUNK_FLAG_LAST, c0)
+    return a
+  }
+
+  it('is pending until the last byte has landed', () => {
+    const a = newInboundAssembler(CHUNK_DATA_SIZE + 10)
+    acceptChunk(a, 0, 0, fullChunk(0xaa))
+    a.expectedSha256 = new Uint8Array(32)
+    expect(inboundVerdict(a)).toBe('pending')
+  })
+
+  it('is pending until the transfer-end digest arrives', () => {
+    const a = completed()
+    expect(a.digest).not.toBeNull()
+    expect(inboundVerdict(a)).toBe('pending') // expectedSha256 still null
+  })
+
+  it('is verified when the digests match', () => {
+    const a = completed()
+    a.expectedSha256 = sha256(tailChunk(6, 0x42))
+    expect(inboundVerdict(a)).toBe('verified')
+  })
+
+  it('is corrupt when the advertised digest differs', () => {
+    const a = completed()
+    a.expectedSha256 = new Uint8Array(32).fill(0xff)
+    expect(inboundVerdict(a)).toBe('corrupt')
   })
 })
 
@@ -168,17 +210,13 @@ describe('finalizeBlobUrl', () => {
       peerHex: 'bb'.repeat(32),
       filename: 'test.bin',
       totalBytes: 6,
-      expectedSha256: sha256(bytes),
       receivedBytes: 6,
-      chunks: new Map(),
-      lastSeq: 5,
       status: 'done',
       assembledBytes: bytes,
     }
     const out = finalizeBlobUrl(t)
     expect(out.blobUrl).toMatch(/^blob:/)
     expect(out.assembledBytes).toBeUndefined()
-    // Read the Blob back to verify byte content.
     const resp = await fetch(out.blobUrl!)
     const buf = new Uint8Array(await resp.arrayBuffer())
     expect(Array.from(buf)).toEqual([0x01, 0x02, 0x03, 0x04, 0x05, 0x06])
@@ -191,10 +229,7 @@ describe('finalizeBlobUrl', () => {
       peerHex: 'bb'.repeat(32),
       filename: 'test.bin',
       totalBytes: 0,
-      expectedSha256: sha256(new Uint8Array(0)),
       receivedBytes: 0,
-      chunks: new Map(),
-      lastSeq: null,
       status: 'streaming',
     }
     const out = finalizeBlobUrl(t)

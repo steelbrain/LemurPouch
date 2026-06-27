@@ -24,7 +24,7 @@ import {
   type PeerRecord,
 } from './relay/wire'
 import { RelayClosedError, connectToRelay, type RelayConnection } from './relay/client'
-import { CHUNK_FLAG_LAST, buildChunk, isLastChunk, parseChunk } from './transfer/chunk'
+import { CHUNK_FLAG_LAST, buildChunk, parseChunk } from './transfer/chunk'
 import {
   TRANSFER_ID_LEN,
   TYPE_TRANSFER_ACCEPT,
@@ -42,17 +42,18 @@ import {
   type IncomingEnvelope,
 } from './transfer/messenger'
 import {
+  CHUNK_DATA_SIZE,
+  type InboundAssembler,
   type InboundTransfer,
   type OutboundTransfer,
+  acceptChunk,
   finalizeBlobUrl,
   formatBytes,
+  inboundVerdict,
   markOutboundStreaming,
-  tryAssemble,
+  newInboundAssembler,
 } from './transfer/state'
 
-// Target raw chunk size for outbound files — AGENTS.md "Encrypted
-// Envelopes > Inner type 0x02": "target 64 KB raw per chunk".
-const CHUNK_DATA_SIZE = 64 * 1024
 // How many chunks to send before yielding to the event loop. Keeps
 // the UI responsive on large files; the value is a balance between
 // throughput (more chunks per yield = less scheduler overhead) and
@@ -152,6 +153,13 @@ export default function App() {
   const messengerRef = useRef<EnvelopeMessenger | null>(null)
   const outboundRef = useRef<Record<string, OutboundTransfer>>({})
   const inboundRef = useRef<Record<string, InboundTransfer>>({})
+  // Per-inbound-transfer mutable accumulators (preallocated buffer +
+  // running SHA-256 + reorder bookkeeping), keyed by transferIdHex. Held
+  // OUTSIDE React state because the hasher is stateful and must be driven
+  // exactly once per frame from the chunk event handler, never from a
+  // (possibly double-invoked) setInbound updater. Allocated on accept,
+  // dropped on done / abort / reject / dismiss / peer-left.
+  const inboundDataRef = useRef<Map<string, InboundAssembler>>(new Map())
   // Set of hex(ed25519_pub) for peers we've observed a peer-left for.
   // Friendship notifications and peer-left broadcasts are dispatched
   // from independent goroutines on the relay (writeAsyncToIdentity vs
@@ -177,11 +185,11 @@ export default function App() {
   }, [inbound])
 
   // Post-commit finalization for inbound transfers that just assembled.
-  // tryAssemble (in transfer/state.ts) is pure: it stages the assembled
-  // payload as `assembledBytes` and flips status to 'done', but does NOT
-  // create the Blob / object URL — that side effect lives here, after
-  // the React commit, so StrictMode's intentional updater double-invoke
-  // can't leak object URLs.
+  // The chunk / transfer-end handlers stage the assembler's buffer as
+  // `assembledBytes` and flip status to 'done', but do NOT create the
+  // Blob / object URL — that side effect lives here, after the React
+  // commit, so StrictMode's intentional updater double-invoke can't leak
+  // object URLs.
   useEffect(() => {
     const finalized: Array<{ key: string; updated: InboundTransfer }> = []
     for (const [k, t] of Object.entries(inbound)) {
@@ -231,6 +239,12 @@ export default function App() {
     let unsubscribeMessage: (() => void) | null = null
     let unsubscribeEnvelope: (() => void) | null = null
     const ac = new AbortController()
+    // Capture the assembler Map instance for the cleanup below. The ref's
+    // `.current` is a single Map created once via useRef and never
+    // reassigned (we only mutate its entries), so this is the same
+    // instance the chunk handlers use — capturing it here just satisfies
+    // the exhaustive-deps "ref may have changed by cleanup" lint.
+    const inboundData = inboundDataRef.current
     // Captured here so the cleanup function can unregister the same
     // function references we attached.
     const onClose = (event: CloseEvent) => {
@@ -339,16 +353,22 @@ export default function App() {
                 }
                 return next
               })
+              // Drop the receive buffers for the gone peer's in-flight
+              // transfers. Done outside the setInbound updater below —
+              // mutating the ref inside a (possibly double-invoked) pure
+              // updater would be a side effect.
+              for (const [k, t] of Object.entries(inboundRef.current)) {
+                if (t.peerHex === goneHex) inboundDataRef.current.delete(k)
+              }
               setInbound((prev) => {
                 const next: Record<string, InboundTransfer> = {}
                 for (const [k, t] of Object.entries(prev)) {
                   if (t.peerHex === goneHex) {
                     if (t.status === 'offered' || t.status === 'streaming') {
-                      // Aborted mid-flight — drop chunk memory + revoke
-                      // any prematurely-assembled blobUrl (shouldn't
-                      // happen but defensive).
+                      // Aborted mid-flight — revoke any prematurely-
+                      // assembled blobUrl (shouldn't happen but defensive).
                       if (t.blobUrl) URL.revokeObjectURL(t.blobUrl)
-                      next[k] = { ...t, status: 'aborted', chunks: new Map(), blobUrl: undefined }
+                      next[k] = { ...t, status: 'aborted', blobUrl: undefined }
                     } else {
                       next[k] = t
                     }
@@ -542,10 +562,7 @@ export default function App() {
             peerHex,
             filename: msg.filename,
             totalBytes: msg.size,
-            expectedSha256: msg.sha256,
             receivedBytes: 0,
-            chunks: new Map(),
-            lastSeq: null,
             status: 'offered',
           }
           setInbound((prev) => ({ ...prev, [transferIdHex]: t }))
@@ -587,17 +604,19 @@ export default function App() {
           break
         }
         case TYPE_TRANSFER_END: {
-          // Sender signaled end-of-stream. If we already saw the last
-          // chunk we may already be assembled; otherwise tryAssemble
-          // returns the input unchanged (a gap remains). The receiver
-          // doesn't reject on transfer-end-without-last-chunk — it
-          // just leaves the transfer in 'streaming' until the gap
-          // fills in or the peer disconnects.
-          setInbound((prev) => {
-            const cur = prev[transferIdHex]
-            if (!cur || cur.peerHex !== peerHex || cur.status !== 'streaming') return prev
-            return { ...prev, [transferIdHex]: tryAssemble(cur) }
-          })
+          // Sender signaled end-of-stream and handed us its finalized
+          // SHA-256. transfer-end may arrive before or after the last
+          // chunk; record the expected digest and try to finalize. If
+          // the contiguous digest isn't ready yet (a gap remains), the
+          // verdict is 'pending' and the chunk handler finalizes once
+          // the gap fills — we don't abort on transfer-end-without-last-
+          // chunk, just wait for the gap or a disconnect.
+          const asm = inboundDataRef.current.get(transferIdHex)
+          const cur = inboundRef.current[transferIdHex]
+          if (!asm || !cur || cur.peerHex !== peerHex || cur.status !== 'streaming') break
+          asm.expectedSha256 = msg.sha256
+          const verdict = inboundVerdict(asm)
+          if (verdict !== 'pending') finalizeInbound(transferIdHex, asm, verdict)
           break
         }
         default:
@@ -618,70 +637,78 @@ export default function App() {
       // can't inject chunks into the wrong inbound state.
       const peerHex = bytesToHex(from)
       const transferIdHex = bytesToHex(c.transferId)
-      // Snapshot c.data into a stable allocation before stashing into
-      // state — c.data is a subarray view into the envelope frame
-      // buffer, which the messenger passes from openEnvelope's
-      // freshly-decrypted plaintext. Per parseChunk's docstring,
-      // callers that need stable storage should clone.
-      const chunkCopy = c.data.slice()
+      // Read the committed state synchronously from the ref so all the
+      // mutating work (folding the chunk into the assembler's buffer +
+      // running hash) happens HERE — exactly once per frame — and not in
+      // the setInbound updater, which React may invoke more than once.
+      const cur = inboundRef.current[transferIdHex]
+      if (!cur || cur.peerHex !== peerHex || cur.status !== 'streaming') return
+      const asm = inboundDataRef.current.get(transferIdHex)
+      // 'streaming' implies the assembler was allocated on accept; if
+      // it's somehow missing, drop rather than crash.
+      if (!asm) return
+
+      // acceptChunk runs all the structural / DoS guards (seq bound,
+      // duplicate, empty-non-last, overshoot cap), copies the bytes into
+      // the preallocated buffer, and folds the contiguous prefix into the
+      // running hash. `c.data` aliases the decrypted frame buffer;
+      // acceptChunk copies it as needed, so no pre-clone is required.
+      const result = acceptChunk(asm, c.seq, c.flags, c.data)
+      if (result === 'duplicate') return
+      if (result === 'abort') {
+        inboundDataRef.current.delete(transferIdHex)
+        setInbound((prev) => {
+          const c2 = prev[transferIdHex]
+          if (!c2 || c2.status !== 'streaming') return prev
+          return { ...prev, [transferIdHex]: { ...c2, status: 'aborted' } }
+        })
+        return
+      }
+      const verdict = inboundVerdict(asm)
+      if (verdict === 'pending') {
+        // Still streaming — just publish progress. Snapshot receivedBytes
+        // out of the (mutable) assembler so the pure updater closes over
+        // a plain number.
+        const received = asm.receivedBytes
+        setInbound((prev) => {
+          const c2 = prev[transferIdHex]
+          if (!c2 || c2.status !== 'streaming') return prev
+          return { ...prev, [transferIdHex]: { ...c2, receivedBytes: received } }
+        })
+        return
+      }
+      finalizeInbound(transferIdHex, asm, verdict)
+    }
+
+    // finalizeInbound flips a fully-received inbound transfer to its
+    // terminal state: 'done' (handing the assembler's buffer to
+    // assembledBytes for the post-commit blob-URL step) or 'aborted' on a
+    // digest mismatch. Drops the assembler from the ref either way — its
+    // buffer is now either owned by assembledBytes or discarded. Called
+    // from both the chunk handler (last byte arrived) and the
+    // transfer-end handler (advertised digest arrived), whichever lands
+    // second.
+    function finalizeInbound(
+      transferIdHex: string,
+      asm: InboundAssembler,
+      verdict: 'verified' | 'corrupt',
+    ): void {
+      inboundDataRef.current.delete(transferIdHex)
       setInbound((prev) => {
         const cur = prev[transferIdHex]
-        if (!cur || cur.peerHex !== peerHex || cur.status !== 'streaming') return prev
-        // Bound seq against the offer-advertised totalBytes. A LAST
-        // chunk with seq=0xffffffff would otherwise drive
-        // tryAssemble's 0..lastSeq loop into a multi-second main-thread
-        // freeze — concrete post-consent DoS. The legitimate sender's
-        // seq lies in [0, expectedChunks-1]; ceil(0/CHUNK)=0 is bumped
-        // to 1 so the totalBytes===0 single-empty-chunk case is allowed.
-        const expectedChunks = Math.max(1, Math.ceil(cur.totalBytes / CHUNK_DATA_SIZE))
-        if (c.seq >= expectedChunks) {
-          return {
-            ...prev,
-            [transferIdHex]: { ...cur, status: 'aborted', chunks: new Map() },
-          }
+        if (!cur || cur.status !== 'streaming') return prev
+        if (verdict === 'corrupt') {
+          return { ...prev, [transferIdHex]: { ...cur, status: 'aborted' } }
         }
-        // Drop duplicate seq entirely. The legitimate sender never
-        // re-sends the same seq; allowing the second to overwrite the
-        // first lets a hostile sender swap a small chunk for a 64 KiB
-        // one without bumping receivedBytes, defeating the totalBytes
-        // cap below.
-        if (cur.chunks.has(c.seq)) return prev
-        // A non-last chunk with no payload bytes is meaningless — the
-        // legitimate sender only emits a zero-length chunk as the
-        // single chunk of a totalBytes===0 transfer (with the LAST
-        // flag set). An attacker could otherwise spam zero-length
-        // chunks at distinct seqs to grow the chunks Map's slot/key
-        // overhead without ever incrementing receivedBytes.
-        if (chunkCopy.length === 0 && !isLastChunk(c.flags)) {
-          return {
-            ...prev,
-            [transferIdHex]: { ...cur, status: 'aborted', chunks: new Map() },
-          }
+        return {
+          ...prev,
+          [transferIdHex]: {
+            ...cur,
+            status: 'done',
+            receivedBytes: asm.totalBytes,
+            assembledBytes: asm.buf,
+          },
         }
-        const nextReceivedBytes = cur.receivedBytes + chunkCopy.length
-        // Cap accumulated bytes at the offer-advertised size: a peer
-        // that overshoots is either buggy or hostile, and continuing to
-        // accept chunks would let them drive unbounded browser memory
-        // off a small offer. The hash check in tryAssemble is the
-        // ultimate integrity gate, but capping here stops the bleeding
-        // before assembly is even attempted.
-        if (nextReceivedBytes > cur.totalBytes) {
-          return {
-            ...prev,
-            [transferIdHex]: { ...cur, status: 'aborted', chunks: new Map() },
-          }
-        }
-        const newChunks = new Map(cur.chunks)
-        newChunks.set(c.seq, chunkCopy)
-        const lastSeq =
-          isLastChunk(c.flags) ? c.seq : cur.lastSeq
-        const updated: InboundTransfer = {
-          ...cur,
-          chunks: newChunks,
-          receivedBytes: nextReceivedBytes,
-          lastSeq,
-        }
-        return { ...prev, [transferIdHex]: tryAssemble(updated) }
       })
     }
 
@@ -728,6 +755,11 @@ export default function App() {
       peerEd25519Pub: Uint8Array,
       bytes: Uint8Array,
     ): Promise<void> {
+      // Running SHA-256 over the chunk payloads, finalized into the
+      // transfer-end below. The chunks cover `bytes` contiguously in seq
+      // order, so this digest equals sha256(bytes) without a separate
+      // up-front pass.
+      const hasher = sha256.create()
       let offset = 0
       let seq = 0
       while (offset < bytes.length || seq === 0) {
@@ -759,6 +791,11 @@ export default function App() {
           return
         }
 
+        // Fold the just-sent bytes into the running digest (only after a
+        // successful send, so the transfer-end digest covers exactly the
+        // chunks that went out).
+        hasher.update(data)
+
         offset += size
         seq++
 
@@ -785,7 +822,7 @@ export default function App() {
       // intervening `await`.
       if (!cancelled && messenger) {
         try {
-          const endJson = buildTransferEnd(transferId)
+          const endJson = buildTransferEnd(transferId, hasher.digest())
           messenger.send(
             peerEd25519Pub,
             INNER_TYPE_JSON_CONTROL,
@@ -891,6 +928,11 @@ export default function App() {
       // backing assembled inbound transfers is released; subsequent
       // mount starts with a clean transfer table.
       setPeers([])
+      // Drop any in-flight receive buffers too — the ref survives a
+      // StrictMode/HMR unmount→remount, so without this an assembler
+      // allocated mid-stream stays pinned into the next mount. Cleared
+      // outside the setInbound updater (refs are not React-tracked state).
+      inboundData.clear()
       setInbound((prev) => {
         for (const t of Object.values(prev)) {
           if (t.blobUrl) URL.revokeObjectURL(t.blobUrl)
@@ -988,12 +1030,14 @@ export default function App() {
     setNotices((prev) => prev.filter((n) => n.id !== id))
   }, [])
 
-  // sendFile is the click-on-Send handler: read the file fully, hash it,
-  // mint a transfer_id, build outbound state, and ship a transfer-offer.
-  // Reading + hashing fully up front is fine for v0 (typical LAN-share
-  // files are well under a few hundred MB); a future streaming hash +
-  // backpressured chunker would let the sender start before the whole
-  // file is in memory.
+  // sendFile is the click-on-Send handler: read the file, mint a
+  // transfer_id, build outbound state, and ship a transfer-offer. The
+  // SHA-256 is NOT computed here — it's folded incrementally through the
+  // chunk loop (streamChunks) and shipped on transfer-end, so the offer
+  // appears in the UI the instant the file is read instead of after a
+  // blocking full-file hash. (Reading the file fully into memory up
+  // front is still fine for v0; a future backpressured chunker reading
+  // off file.stream() would drop the last whole-file-in-memory step.)
   const sendFile = useCallback(async (peer: PeerRecord, file: File): Promise<void> => {
     const m = messengerRef.current
     if (!m || !m.hasFriend(peer.ed25519Pub)) {
@@ -1007,7 +1051,6 @@ export default function App() {
       console.warn('sendFile: file.arrayBuffer() failed:', err)
       return
     }
-    const sha = sha256(bytes)
     const transferId = randomBytes(TRANSFER_ID_LEN)
     const transferIdHex = bytesToHex(transferId)
     const peerHex = bytesToHex(peer.ed25519Pub)
@@ -1030,7 +1073,7 @@ export default function App() {
     // Send the offer envelope. If this throws, roll back the optimistic
     // state — a never-shipped offer should not surface in the UI.
     try {
-      const offerJson = buildTransferOffer(transferId, file.name, bytes.length, sha)
+      const offerJson = buildTransferOffer(transferId, file.name, bytes.length)
       m.send(peer.ed25519Pub, INNER_TYPE_JSON_CONTROL, new TextEncoder().encode(offerJson))
     } catch (err) {
       console.warn('sendFile: transfer-offer send failed:', err)
@@ -1067,10 +1110,31 @@ export default function App() {
     if (!m) return
     const cur = inboundRef.current[transferIdHex]
     if (!cur || cur.status !== 'offered') return
+    // Allocate the receive buffer + hasher up front so it's in place
+    // before any chunk can arrive. A hostile/buggy peer can advertise an
+    // absurd size; `new Uint8Array(totalBytes)` throws RangeError rather
+    // than allocating — treat that as a failed accept, not a crash.
+    let asm: InboundAssembler
+    try {
+      asm = newInboundAssembler(cur.totalBytes)
+    } catch (err) {
+      console.warn('transfer-accept: receive buffer allocation failed:', err)
+      inboundRef.current = {
+        ...inboundRef.current,
+        [transferIdHex]: { ...cur, status: 'aborted' },
+      }
+      setInbound((prev) => {
+        const c2 = prev[transferIdHex]
+        if (!c2 || c2.status !== 'offered') return prev
+        return { ...prev, [transferIdHex]: { ...c2, status: 'aborted' } }
+      })
+      return
+    }
     inboundRef.current = {
       ...inboundRef.current,
       [transferIdHex]: { ...cur, status: 'streaming' },
     }
+    inboundDataRef.current.set(transferIdHex, asm)
     try {
       const transferId = hexToBytes(transferIdHex)
       const peerEd25519Pub = hexToBytes(cur.peerHex)
@@ -1078,8 +1142,10 @@ export default function App() {
       m.send(peerEd25519Pub, INNER_TYPE_JSON_CONTROL, new TextEncoder().encode(acceptJson))
     } catch (err) {
       console.warn('transfer-accept send failed:', err)
-      // Roll back the optimistic claim so the user can retry.
+      // Roll back the optimistic claim + drop the buffer so the user can
+      // retry.
       inboundRef.current = { ...inboundRef.current, [transferIdHex]: cur }
+      inboundDataRef.current.delete(transferIdHex)
       return
     }
     setInbound((prev) => {
@@ -1135,6 +1201,10 @@ export default function App() {
         return next
       })
     } else {
+      // Drop any lingering assembler (defensive — a terminal transfer's
+      // assembler was already dropped on done/abort, but a dismiss of a
+      // still-streaming transfer would leave its buffer pinned).
+      inboundDataRef.current.delete(transferIdHex)
       setInbound((prev) => {
         const cur = prev[transferIdHex]
         if (cur?.blobUrl) URL.revokeObjectURL(cur.blobUrl)

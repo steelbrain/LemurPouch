@@ -25,8 +25,11 @@ export const TYPE_TRANSFER_END = 'transfer-end'
 // between the same pair without the relay ever inspecting it.
 export const TRANSFER_ID_LEN = 16
 
-// sha256 is the 32-byte digest of the file payload. Optional integrity
-// check the recipient runs after reassembly; not used for routing.
+// sha256 is the 32-byte digest of the file payload, carried on
+// transfer-end (NOT transfer-offer): the sender hashes incrementally
+// while streaming, so the digest only exists once the last chunk has
+// gone out. Integrity check the recipient runs after the last byte;
+// not used for routing.
 const SHA256_LEN = 32
 
 // --- decoded message types ---
@@ -36,7 +39,6 @@ export interface TransferOfferMsg {
   transferId: Uint8Array
   filename: string
   size: number
-  sha256: Uint8Array
 }
 
 export interface TransferAcceptMsg {
@@ -55,6 +57,10 @@ export interface TransferRejectMsg {
 export interface TransferEndMsg {
   type: typeof TYPE_TRANSFER_END
   transferId: Uint8Array
+  // The sender's finalized SHA-256 of the file payload, computed
+  // incrementally as chunks were streamed. The recipient verifies it
+  // against its own incremental digest of the received bytes.
+  sha256: Uint8Array
 }
 
 // TransferControlMsg is the discriminated union of every inner-type-0x01
@@ -77,16 +83,10 @@ export function buildTransferOffer(
   transferId: Uint8Array,
   filename: string,
   size: number,
-  sha256: Uint8Array,
 ): string {
   if (transferId.length !== TRANSFER_ID_LEN) {
     throw new WireProtocolError(
       `transfer-offer: transfer_id must be ${TRANSFER_ID_LEN} bytes, got ${transferId.length}`,
-    )
-  }
-  if (sha256.length !== SHA256_LEN) {
-    throw new WireProtocolError(
-      `transfer-offer: sha256 must be ${SHA256_LEN} bytes, got ${sha256.length}`,
     )
   }
   if (!Number.isInteger(size) || size < 0) {
@@ -99,12 +99,19 @@ export function buildTransferOffer(
     transfer_id: bytesToBase64(transferId),
     filename,
     size,
-    sha256: bytesToBase64(sha256),
   })
 }
 
 export function buildTransferAccept(transferId: Uint8Array): string {
-  return buildSimpleTransferDirective(TYPE_TRANSFER_ACCEPT, transferId)
+  if (transferId.length !== TRANSFER_ID_LEN) {
+    throw new WireProtocolError(
+      `transfer-accept: transfer_id must be ${TRANSFER_ID_LEN} bytes, got ${transferId.length}`,
+    )
+  }
+  return JSON.stringify({
+    type: TYPE_TRANSFER_ACCEPT,
+    transfer_id: bytesToBase64(transferId),
+  })
 }
 
 export function buildTransferReject(transferId: Uint8Array, reason?: string): string {
@@ -129,24 +136,22 @@ export function buildTransferReject(transferId: Uint8Array, reason?: string): st
   })
 }
 
-export function buildTransferEnd(transferId: Uint8Array): string {
-  return buildSimpleTransferDirective(TYPE_TRANSFER_END, transferId)
-}
-
-// buildSimpleTransferDirective is the shared body for the three
-// transfer-id-only directives (accept/end and the no-reason form of
-// reject). Factored privately so a caller can't accidentally pass an
-// unrelated `type` string.
-function buildSimpleTransferDirective(
-  type: typeof TYPE_TRANSFER_ACCEPT | typeof TYPE_TRANSFER_END,
-  transferId: Uint8Array,
-): string {
+export function buildTransferEnd(transferId: Uint8Array, sha256: Uint8Array): string {
   if (transferId.length !== TRANSFER_ID_LEN) {
     throw new WireProtocolError(
-      `${type}: transfer_id must be ${TRANSFER_ID_LEN} bytes, got ${transferId.length}`,
+      `transfer-end: transfer_id must be ${TRANSFER_ID_LEN} bytes, got ${transferId.length}`,
     )
   }
-  return JSON.stringify({ type, transfer_id: bytesToBase64(transferId) })
+  if (sha256.length !== SHA256_LEN) {
+    throw new WireProtocolError(
+      `transfer-end: sha256 must be ${SHA256_LEN} bytes, got ${sha256.length}`,
+    )
+  }
+  return JSON.stringify({
+    type: TYPE_TRANSFER_END,
+    transfer_id: bytesToBase64(transferId),
+    sha256: bytesToBase64(sha256),
+  })
 }
 
 // --- parsers ---
@@ -157,8 +162,7 @@ export function parseTransferOffer(json: string): TransferOfferMsg {
   const transferId = decodeB64Field(obj, 'transfer_id', TRANSFER_ID_LEN)
   const filename = expectString(obj.filename, 'filename')
   const size = expectNonNegativeInteger(obj.size, 'size')
-  const sha256 = decodeB64Field(obj, 'sha256', SHA256_LEN)
-  return { type: TYPE_TRANSFER_OFFER, transferId, filename, size, sha256 }
+  return { type: TYPE_TRANSFER_OFFER, transferId, filename, size }
 }
 
 export function parseTransferAccept(json: string): TransferAcceptMsg {
@@ -192,6 +196,7 @@ export function parseTransferEnd(json: string): TransferEndMsg {
   return {
     type: TYPE_TRANSFER_END,
     transferId: decodeB64Field(obj, 'transfer_id', TRANSFER_ID_LEN),
+    sha256: decodeB64Field(obj, 'sha256', SHA256_LEN),
   }
 }
 
