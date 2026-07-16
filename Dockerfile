@@ -2,7 +2,7 @@
 #
 # Multi-stage Dockerfile for LemurPouch.
 #
-#   Stage 1 (web-build):  Node compiles the React bundle to web/dist/.
+#   Stage 1 (portal-build):  Node compiles the React bundle to portal/dist/.
 #   Stage 2 (go-build):   Go cross-compiles the relay binary; the
 #                         //go:embed directive in main.go bakes in
 #                         the dist/ from stage 1.
@@ -17,15 +17,15 @@
 # build host even when the target platform differs (the JS output is
 # platform-independent so there is no point running it under qemu).
 
-FROM --platform=$BUILDPLATFORM node:24-alpine AS web-build
-WORKDIR /src/web
+FROM --platform=$BUILDPLATFORM node:24-alpine AS portal-build
+WORKDIR /src/portal
 
 # Copy lockfile + manifest first so the install layer is cached when
 # only source files change.
-COPY web/package.json web/package-lock.json ./
+COPY portal/package.json portal/package-lock.json ./
 RUN npm ci
 
-COPY web/ ./
+COPY portal/ ./
 RUN npm run build
 
 
@@ -41,10 +41,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-# Drop the build-host's web/dist (a .gitkeep stub) and substitute the
+# Drop the build-host's portal/dist (a .gitkeep stub) and substitute the
 # dist/ produced in stage 1, so the //go:embed picks up the real bundle.
-RUN rm -rf web/dist
-COPY --from=web-build /src/web/dist ./web/dist
+RUN rm -rf portal/dist
+COPY --from=portal-build /src/portal/dist ./portal/dist
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -89,5 +89,5 @@ CMD ["--listen", ":8080"]
 # pulling the image can navigate back to the source.
 LABEL org.opencontainers.image.title="LemurPouch"
 LABEL org.opencontainers.image.description="LemurPouch — LAN file-sharing relay (Go + React), outbound TCP only, end-to-end encrypted between paired peers."
-LABEL org.opencontainers.image.source="https://github.com/steelbrain/lemur-pouch"
+LABEL org.opencontainers.image.source="https://github.com/steelbrain/LemurPouch"
 LABEL org.opencontainers.image.licenses="MIT"

@@ -6,7 +6,7 @@ Conventions for AI agents (Claude Code, Codex, etc.) working in this repository.
 
 LemurPouch ([lemurpouch.com](https://lemurpouch.com)) — a LAN file-sharing relay. Two clients open outbound WebSocket connections to a Go relay; the relay routes opaque encrypted ciphertext between them. Designed to work on the most restrictive networks (corporate firewalls, aggressive NAT) — the only thing it asks of the network is "outbound TCP works."
 
-The Go module path is `github.com/steelbrain/lemur-pouch`. The local working-directory name may still be `file-sharing/` on some checkouts (a leftover from before the project rename); leave that alone unless explicitly asked to rename it — every tool path that encodes the directory (e.g. the Claude memory directory under `~/.claude/projects/`) would also have to move.
+The Go module path is `github.com/steelbrain/LemurPouch`. The local working-directory name may still be `file-sharing/` on some checkouts (a leftover from before the project rename); leave that alone unless explicitly asked to rename it — every tool path that encodes the directory (e.g. the Claude memory directory under `~/.claude/projects/`) would also have to move.
 
 The Protocol Reference appendix below is the source of truth for the protocol, threat model, and consent model. Any change to wire format, crypto construction, or consent semantics must cite a section there.
 
@@ -19,7 +19,7 @@ The Protocol Reference appendix below is the source of truth for the protocol, t
 ├── CLAUDE.md              ← imports AGENTS.md
 ├── LICENSE.md             ← MIT
 ├── Dockerfile             ← Linux multi-stage build → distroless runtime (see "Docker / ghcr.io")
-├── Dockerfile.windows     ← Windows nanoserver image; consumes prebuilt lemur-pouch.exe
+├── Dockerfile.windows     ← Windows nanoserver image; consumes prebuilt LemurPouch.exe
 ├── .github/workflows/
 │   ├── docker.yml         ← multi-OS manifest (linux/amd64+arm64 + windows/amd64) build/push to ghcr.io
 │   └── release.yml        ← 6-cell binary matrix → workflow artifacts on main, GitHub Release on tags
@@ -28,7 +28,7 @@ The Protocol Reference appendix below is the source of truth for the protocol, t
 │   ├── build.sh           ← bundles frontend, then `go build` (cross-compile via GOOS/GOARCH)
 │   ├── install.sh         ← curl|sh installer: downloads latest release, verifies SHA256, exec's relay
 │   └── install.ps1        ← irm|iex installer for native Windows (mirrors install.sh)
-├── main.go                ← CLI entry: dispatch to --serve (relay) / --connect (TUI) / help
+├── main.go                ← CLI entry: dispatch to --serve / --connect / interactive picker / help
 ├── internal/
 │   ├── cryptoid/          ← Ed25519 + X25519 identity, BIP-39 fingerprint
 │   ├── wireproto/         ← cleartext JSON message types + binary envelope layout
@@ -37,9 +37,9 @@ The Protocol Reference appendix below is the source of truth for the protocol, t
 │   │                        envelope routing — the relay's behavior
 │   ├── client/            ← native Go protocol client: the browser-side half
 │   │                        (handshake, discovery, friendship keys, messenger,
-│   │                        transfer state machine), mirrored from web/src
+│   │                        transfer state machine), mirrored from portal/src
 │   └── tui/               ← full-screen bubbletea terminal client over internal/client
-└── web/
+└── portal/
     └── src/
         ├── crypto/        ← TS mirror of cryptoid + envelope wire + session keys + AEAD
         ├── relay/         ← WebSocket connection client + cleartext wire types
@@ -49,12 +49,12 @@ The Protocol Reference appendix below is the source of truth for the protocol, t
 
 ## Build & test commands
 
-**This repo uses npm, not pnpm.** `web/package-lock.json` is committed; there is no `pnpm-lock.yaml`. Using pnpm creates a divergent `node_modules` tree and an untracked lockfile.
+**This repo uses npm, not pnpm.** `portal/package-lock.json` is committed; there is no `pnpm-lock.yaml`. Using pnpm creates a divergent `node_modules` tree and an untracked lockfile.
 
 ```
 # Go side — scoped to OUR packages (root + internal/...). Never use
 # `./...`: the module root is the repo root, so `./...` descends into
-# web/node_modules/ and picks up Go source shipped by npm packages
+# portal/node_modules/ and picks up Go source shipped by npm packages
 # (e.g. `flatted/golang/pkg/flatted`), running our test/vet on
 # arbitrary transitive npm code. If you ever add a new top-level Go
 # directory (e.g. `cmd/foo/`, `pkg/bar/`), list it here too.
@@ -62,7 +62,7 @@ go build ./internal/... .
 go test ./internal/... . -race -count=1     ← always under -race; the relay is heavily concurrent
 go vet ./internal/... .
 
-# TS side (from web/)
+# TS side (from portal/)
 npm install                       ← first time only
 npm test                          ← vitest
 npx tsc --noEmit                  ← strict typecheck (separate from build)
@@ -70,18 +70,18 @@ npm run build                     ← tsc -b && vite build (slower; produces dis
 npm run lint                      ← eslint
 ```
 
-`web/dist/.gitkeep` is committed so `//go:embed` can compile against an empty dist when no production build has run. `vite build` deletes it on each run — restore with `git checkout HEAD -- web/dist/.gitkeep` before committing.
+`portal/dist/.gitkeep` is committed so `//go:embed` can compile against an empty dist when no production build has run. `vite build` deletes it on each run — restore with `git checkout HEAD -- portal/dist/.gitkeep` before committing.
 
-`web/dist/` itself is gitignored. Don't stage built assets.
+`portal/dist/` itself is gitignored. Don't stage built assets.
 
-The relay's `SetReadLimit` is 128 KiB to fit a 64 KiB raw envelope chunk + 73-byte header/tag. Tests that exercise the limit must send strictly more than that.
+The relay's `SetReadLimit` is 4 MiB (`wireproto.ReadLimit`) to fit a negotiated raw chunk up to 1 MiB plus envelope/chunk header overhead. The legacy floor remains 64 KiB. Tests that exercise the limit must send strictly more than `ReadLimit`.
 
 ## Verification before commit
 
 For any non-trivial change, run the full triad:
 1. `go test ./internal/... . -race -count=1`
-2. `cd web && npm test && npx tsc --noEmit && npm run build`
-3. `go vet ./internal/... . && (cd web && npm run lint)`
+2. `cd portal && npm test && npx tsc --noEmit && npm run build`
+3. `go vet ./internal/... . && (cd portal && npm run lint)`
 
 `npm run lint` is clean (exit 0, no warnings). Keep it that way — don't introduce new `no-explicit-any` or other rule violations as part of unrelated work.
 
@@ -100,12 +100,12 @@ For any non-trivial change, run the full triad:
 
 The Go relay and the TS frontend share a wire format. Drift breaks interop silently. Always ensure both sides update in lockstep:
 
-- **JSON field names** are `snake_case` (Go's `json:"…"` struct tags). TS uses snake_case on the wire and camelCase in TS interfaces; the parsers in `web/src/relay/wire.ts` and `web/src/transfer/control.ts` translate at the boundary.
+- **JSON field names** are `snake_case` (Go's `json:"…"` struct tags). TS uses snake_case on the wire and camelCase in TS interfaces; the parsers in `portal/src/relay/wire.ts` and `portal/src/transfer/control.ts` translate at the boundary.
 - **`type` discriminator strings** must be byte-identical across sides. Each layer has a pinning test (e.g. `TestFriendshipJSONFieldNames` on the Go side) — add one when you add a new message type.
-- **Base64** for byte fields uses RFC 4648 standard (with padding) — that's what Go's `encoding/json` does for `[]byte`. TS uses `bytesToBase64` / `base64ToBytes` from `web/src/relay/wire.ts`.
+- **Base64** for byte fields uses RFC 4648 standard (with padding) — that's what Go's `encoding/json` does for `[]byte`. TS uses `bytesToBase64` / `base64ToBytes` from `portal/src/relay/wire.ts`.
 - **Nil byte fields**: Go marshals nil `[]byte` as JSON `null`. The TS parsers must reject `null` (treat as malformed); there's a pinning test (`TestNilByteFieldsMarshalAsNull` Go-side, mirror tests TS-side).
-- **Binary envelope layout** (`internal/wireproto/envelope.go` ↔ `web/src/crypto/envelope.ts`): `[1 byte inner-type][32 byte peer key][24 byte XChaCha nonce][N byte ciphertext+tag]`. The inner-type byte is the AEAD's AAD — DO NOT include the peer field in AAD because the relay legitimately rewrites it on forward.
-- **Domain separators**: `lemur-pouch/v1/bind-x25519:` (binding signature) and `lemur-pouch/v1/session:` (HKDF info prefix). Defined as `BIND_CONTEXT` / `SESSION_INFO` in TS and as Go constants. Changing either is a flag-day v2 bump.
+- **Binary envelope layout** (`internal/wireproto/envelope.go` ↔ `portal/src/crypto/envelope.ts`): `[1 byte inner-type][32 byte peer key][24 byte XChaCha nonce][N byte ciphertext+tag]`. The inner-type byte is the AEAD's AAD — DO NOT include the peer field in AAD because the relay legitimately rewrites it on forward.
+- **Domain separators**: `LemurPouch/v1/bind-x25519:` (binding signature) and `LemurPouch/v1/session:` (HKDF info prefix). Defined as `BIND_CONTEXT` / `SESSION_INFO` in TS and as Go constants. Changing either is a flag-day v2 bump.
 - **HKDF salt**: byte-wise lex-sorted concatenation of the two raw 32-byte ed25519 pubs (`min(a,b) || max(a,b)`). Direction string is `"a-to-b"` if the lex-smaller identity is the sender, else `"b-to-a"`. Both peers compute both keys.
 
 ## What the relay does NOT do
@@ -168,7 +168,7 @@ git -C <main repo> branch -d steelbrain/<feature-name>
 
 If you spawn background subagents in a worktree, do not rebase the worktree branch while they're running — it'll invalidate their working tree.
 
-`web/node_modules` and `web/pnpm-lock.yaml` (if pnpm was accidentally used) are not committed, so a fresh worktree needs `npm install` in `web/` before TS commands work.
+`portal/node_modules` and `portal/pnpm-lock.yaml` (if pnpm was accidentally used) are not committed, so a fresh worktree needs `npm install` in `portal/` before TS commands work.
 
 ## Background subagents for review-fix-verify
 
@@ -200,11 +200,11 @@ Outputs:
 - **PR or push to main** → archives upload as workflow artifacts (`.tar.gz` for unix, `.zip` for windows), 90-day retention. Useful for smoke-testing before tagging.
 - **Tag push (`v*`)** → the `release` job downloads all six artifacts, aggregates the per-archive `.sha256` sidecars into one `SHA256SUMS`, and publishes everything to a GitHub Release with auto-generated notes.
 
-Archive naming: `lemur-pouch-<goos>-<goarch>.{tar.gz,zip}`. Inside, the binary is just `lemur-pouch` (or `lemur-pouch.exe`) — the OS/arch lives in the archive name, not the binary name.
+Archive naming: `LemurPouch-<goos>-<goarch>.{tar.gz,zip}`. Inside, the binary is just `LemurPouch` (or `LemurPouch.exe`) — the OS/arch lives in the archive name, not the binary name.
 
 ## Docker / ghcr.io
 
-The repo ships two Dockerfiles — `Dockerfile` (Linux multi-stage: Node → Go → distroless/static) and `Dockerfile.windows` (windows/amd64, nanoserver) — and one workflow `.github/workflows/docker.yml` that publishes them as a **single unified multi-platform manifest** at `ghcr.io/<owner>/lemur-pouch`. `docker pull lemur-pouch:latest` resolves to the right image for the host's OS+arch automatically; there is no Windows-specific tag suffix. (No windows/arm64 — Windows Server containers don't ship arm64 base images.)
+The repo ships two Dockerfiles — `Dockerfile` (Linux multi-stage: Node → Go → distroless/static) and `Dockerfile.windows` (windows/amd64, nanoserver) — and one workflow `.github/workflows/docker.yml` that publishes them as a **single unified multi-platform manifest** at `ghcr.io/<owner>/LemurPouch` (same name as the GitHub repo). `docker pull LemurPouch:latest` resolves to the right image for the host's OS+arch automatically; there is no Windows-specific tag suffix. (No windows/arm64 — Windows Server containers don't ship arm64 base images.)
 
 Triggers and tags (same scheme for every platform under one tag):
 - pushes to `main` → `:main`, `:sha-<short>`, `:latest`
@@ -213,23 +213,23 @@ Triggers and tags (same scheme for every platform under one tag):
 
 Workflow shape (4 jobs):
 1. `build-linux` (matrix linux/amd64 + linux/arm64, ubuntu-latest) — buildx with `outputs: type=image,push-by-digest=true,push=true`. Each cell uploads its digest as an artifact.
-2. `build-windows-binary` (ubuntu-latest) — npm install + vite build + cross-compile a windows/amd64 `lemur-pouch.exe`. Uploaded as artifact.
+2. `build-windows-binary` (ubuntu-latest) — npm install + vite build + cross-compile a windows/amd64 `LemurPouch.exe`. Uploaded as artifact.
 3. `build-windows-image` (windows-2022) — downloads the .exe, builds `Dockerfile.windows` with plain `docker build`, pushes to a clearly-internal `_stage-windows-amd64-<run-id>` tag, then captures the resulting digest from `docker push` output. Native Windows runner is unavoidable: Linux runners can't build Windows-base images (the Docker daemon must be in Windows-container mode, which requires a Windows host). We deliberately do NOT use `docker/setup-buildx-action` here — its default `docker-container` driver tries to boot `moby/buildkit:buildx-stable-1`, which is Linux-only and fails on a Windows host with "no matching manifest for windows/amd64". The `docker` driver would work but doesn't support `outputs: type=image,push-by-digest=true` anyway, so we'd lose the buildx benefit; plain docker + parse-digest-from-push-output is the smallest reliable shape. The `_stage-*` tags accumulate on GHCR (the merge job references the image by digest, not by this tag); delete them periodically via the GHCR package settings page.
 4. `merge` (ubuntu-latest) — downloads all per-platform digests and runs `docker buildx imagetools create -t <public-tag> @sha256:linux-amd64 @sha256:linux-arm64 @sha256:windows-amd64` once per public tag. **Atomicity**: if any platform build fails, `merge` doesn't run and existing public tags keep pointing at the previous good manifest — tag updates are all-or-nothing across platforms.
 
 The windows/amd64 cross-compile in step 2 duplicates work the `release.yml` binary matrix already does (its windows/amd64 cell ships the standalone .zip). The duplication is the price of keeping `docker.yml` self-contained; cross-workflow artifact sharing is more cost than the ~40 s of build time saved.
 
-Local sanity test: `docker build -t lemur-pouch . && docker run --rm -p 8080:8080 lemur-pouch`. The relay detects containerization via the `LEMURPOUCH_IN_CONTAINER` env var, which the project's `Dockerfile` sets explicitly (`ENV LEMURPOUCH_IN_CONTAINER=1`); when set, the startup banner prints an extra hint that the enumerated interface IPs are container-internal bridge addresses, not host LAN IPs. We deliberately do NOT probe `/.dockerenv` — that would also fire for users who built a custom image around the binary or `docker cp`-ed it out and re-ran it elsewhere.
+Local sanity test: `docker build -t LemurPouch . && docker run --rm -p 8080:8080 LemurPouch`. The relay detects containerization via the `LEMURPOUCH_IN_CONTAINER` env var, which the project's `Dockerfile` sets explicitly (`ENV LEMURPOUCH_IN_CONTAINER=1`); when set, the startup banner prints an extra hint that the enumerated interface IPs are container-internal bridge addresses, not host LAN IPs. We deliberately do NOT probe `/.dockerenv` — that would also fire for users who built a custom image around the binary or `docker cp`-ed it out and re-ran it elsewhere.
 
 After the first GitHub Actions push, the package on ghcr.io is private by default. Make it public via the package settings page so anonymous `docker pull` works.
 
 When changing the Linux `Dockerfile`:
 - Keep the `--platform=$BUILDPLATFORM` annotations on builder stages — they keep Node and the Go toolchain native, with cross-compile via `GOOS`/`GOARCH`. Dropping them forces qemu emulation and triples build times.
 - The runtime stage should stay distroless/static. It's the smallest base that gives us CA certs + a nonroot user without a shell. If you find yourself wanting `apk add` something at runtime, you're solving the wrong problem.
-- `web/dist/` in the host repo is a `.gitkeep`-only stub. The Dockerfile's `RUN rm -rf web/dist` before `COPY --from=web-build` is intentional — it keeps host build output (if any) from leaking into the image.
+- `portal/dist/` in the host repo is a `.gitkeep`-only stub. The Dockerfile's `RUN rm -rf portal/dist` before `COPY --from=portal-build` is intentional — it keeps host build output (if any) from leaking into the image.
 
 When changing `Dockerfile.windows`:
-- Keep it tiny — `FROM nanoserver:ltsc2022` + `COPY lemur-pouch.exe` + `ENTRYPOINT`. The .exe is cross-compiled on Linux upstream; don't try to compile Go inside a Windows container build (slow, fragile).
+- Keep it tiny — `FROM nanoserver:ltsc2022` + `COPY LemurPouch.exe` + `ENTRYPOINT`. The .exe is cross-compiled on Linux upstream; don't try to compile Go inside a Windows container build (slow, fragile).
 - Stick with `nanoserver:ltsc2022` to match the `windows-2022` runner family. Don't reach for `windowsservercore` unless we actually need Windows shared libraries — nanoserver is much smaller and our static binary doesn't need anything more.
 
 ## Browser testing
@@ -255,7 +255,7 @@ File sharing across operating systems that works on the most restrictive network
 
 - **Relay server**: a single deployable that runs on the LAN. Serves a static website over HTTP and exposes a WebSocket endpoint for clients. Enforces all consent gates and rate limits. After friendship is established, the relay forwards opaque ciphertext envelopes it cannot read.
 - **Browser clients**: each device opens the relay's URL; the page *is* the daemon. This is still the default client.
-- **Native TUI client** (`internal/client` + `internal/tui`, launched via `lemur-pouch --connect URL`): a full-screen terminal client that speaks the identical protocol with far less memory/CPU than the browser. `internal/client` is a Go mirror of the `web/src` client logic; any wire-format change must update both. It is not a background daemon — it runs only while the TUI is open, and identity is still session-scoped.
+- **Native TUI client** (`internal/client` + `internal/tui`, launched via `LemurPouch --connect URL`): a full-screen terminal client that speaks the identical protocol with far less memory/CPU than the browser. `internal/client` is a Go mirror of the `portal/src` client logic; any wire-format change must update both. It is not a background daemon — it runs only while the TUI is open, and identity is still session-scoped.
 - **Transport**: outbound WebSocket from each client to the relay. JSON for unencrypted control messages; binary frames for encrypted peer-to-peer payloads.
 
 ### Identity
@@ -462,9 +462,9 @@ All `<base64>` fields are RFC 4648 standard base64 (with padding) of the raw byt
 
 To prevent signatures and derived keys from being misused across protocol contexts, fixed string prefixes are used:
 
-- **Binding signature**: `sig_ed25519("lemur-pouch/v1/bind-x25519:" || x25519_pub)` — included in every peer's discovery row so others can verify the X25519 key is bound to the Ed25519 identity.
+- **Binding signature**: `sig_ed25519("LemurPouch/v1/bind-x25519:" || x25519_pub)` — included in every peer's discovery row so others can verify the X25519 key is bound to the Ed25519 identity.
 - **HKDF salt**: `min(ed25519_pub_A, ed25519_pub_B) || max(ed25519_pub_A, ed25519_pub_B)` — byte-wise lex order of the two raw 32-byte keys. Both peers derive the same salt independently from public keys they already know.
-- **HKDF info**: `"lemur-pouch/v1/session:" || direction`, where `direction` is `"a-to-b"` if the lex-smaller identity is the sender, else `"b-to-a"`. Each friendship has two 32-byte directional session keys; both peers compute both.
+- **HKDF info**: `"LemurPouch/v1/session:" || direction`, where `direction` is `"a-to-b"` if the lex-smaller identity is the sender, else `"b-to-a"`. Each friendship has two 32-byte directional session keys; both peers compute both.
 
 #### Cleartext Control (text frames, JSON)
 
@@ -577,10 +577,26 @@ already authenticates each frame against a tampering relay.
 [ 16 bytes] transfer_id
 [ 4 bytes ] seq (uint32 big-endian)
 [ 1 byte  ] flags  (bit 0 = last chunk)
-[ N bytes ] raw file data       (target 64 KB raw per chunk)
+[ N bytes ] raw file data       (negotiated size, floor 64 KiB)
 ```
 
 The receiver writes chunks in `seq` order, buffering out-of-order arrivals. Multiple concurrent transfers between the same pair are supported by distinct `transfer_id`s; the relay never inspects them.
+
+Receivers bound `seq` by `ceil(totalBytes / 64 KiB)` so larger negotiated chunks always validate. The negotiated raw chunk size never goes below 64 KiB.
+
+#### Flow Control & Negotiated Limits
+
+Additive, negotiated capabilities so multi-gig transfers stay reliable without breaking older clients:
+
+- **`welcome.limits.max_chunk_bytes`** (optional): largest raw chunk-data size the relay will forward (default advertise: 1 MiB). Absent on old relays ⇒ clients treat as 64 KiB. The relay's `SetReadLimit` is larger (4 MiB) to cover envelope overhead.
+- **`transfer-accept` optional fields** `max_chunk_bytes` and `window_bytes`: receiver capacity. Absent ⇒ legacy 64 KiB chunks, unwindowed streaming (status quo).
+- **Effective chunk size**: `min(sender preference, relay max ?? 64Ki, accept max ?? 64Ki)`, floored at 64 KiB. Any advertised value below 65536 is treated as 65536.
+- **Effective window**: when `window_bytes` is present, `max(window_bytes, 2 × chunk)` so one outstanding chunk cannot deadlock. Default window: 8 MiB.
+- **`transfer-ack`** (new inner-0x01 type): `{type:"transfer-ack", transfer_id, received_bytes}` — cumulative, monotonic receiver→sender progress. Receiver emits when `received − lastAcked ≥ window/4`. Old senders drop unknown 0x01 types silently.
+- **Windowed sender**: only when accept carried `window_bytes`, block while `sent − lastAck ≥ window`; abort with reason `"flow-control stall"` after 30 s without ack progress. Unwindowed (old accept) never waits on acks.
+- **Version mixes**: new↔new = windowed + negotiated chunks; any side missing the new fields degrades to 64 KiB unwindowed streaming.
+
+Cipher, hash, envelope layout, and domain separators are unchanged (no v2).
 
 #### Transfer Lifecycle
 

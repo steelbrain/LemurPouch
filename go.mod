@@ -1,4 +1,4 @@
-module github.com/steelbrain/lemur-pouch
+module github.com/steelbrain/LemurPouch
 
 go 1.25.0
 

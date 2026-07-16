@@ -14,8 +14,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/steelbrain/lemur-pouch/internal/cryptoid"
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/cryptoid"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // writeTimeout bounds a single frame write so a wedged relay can't block the
@@ -45,6 +45,9 @@ type Client struct {
 	conn        *websocket.Conn
 	self        PeerInfo
 	downloadDir string
+	// maxChunkBytes is the relay's advertised max raw chunk size (0 ⇒ legacy
+	// 64 KiB floor). Captured from welcome.limits.
+	maxChunkBytes int
 
 	events  chan Event
 	writeCh chan outFrame
@@ -79,11 +82,12 @@ func Connect(ctx context.Context, rawURL string, id *cryptoid.Identity, download
 	if err != nil {
 		return nil, fmt.Errorf("dial relay: %w", err)
 	}
-	// The relay caps frames at 128 KiB; match it so we can receive a full
-	// 64 KiB chunk envelope without tripping the default 32 KiB read limit.
-	conn.SetReadLimit(128 * 1024)
+	// Match the relay's frame cap so we can receive a full negotiated chunk
+	// envelope. writeCh occupancy per transfer is bounded by window/chunk
+	// (~8 frames at default 8 MiB / 1 MiB), so the 64-frame buffer is fine.
+	conn.SetReadLimit(int64(wireproto.ReadLimit))
 
-	self, err := doHandshake(ctx, conn, id)
+	self, maxChunk, err := doHandshake(ctx, conn, id)
 	if err != nil {
 		conn.Close(websocket.StatusInternalError, "handshake failed")
 		return nil, err
@@ -91,18 +95,19 @@ func Connect(ctx context.Context, rawURL string, id *cryptoid.Identity, download
 
 	bg, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		id:          id,
-		conn:        conn,
-		self:        self,
-		downloadDir: downloadDir,
-		events:      make(chan Event, eventBuffer),
-		writeCh:     make(chan outFrame, 64),
-		ctx:         bg,
-		cancel:      cancel,
-		peers:       make(map[string]PeerInfo),
-		friends:     make(map[string]*friendship),
-		inbound:     make(map[string]*inboundTransfer),
-		outbound:    make(map[string]*outboundTransfer),
+		id:            id,
+		conn:          conn,
+		self:          self,
+		downloadDir:   downloadDir,
+		maxChunkBytes: maxChunk,
+		events:        make(chan Event, eventBuffer),
+		writeCh:       make(chan outFrame, 64),
+		ctx:           bg,
+		cancel:        cancel,
+		peers:         make(map[string]PeerInfo),
+		friends:       make(map[string]*friendship),
+		inbound:       make(map[string]*inboundTransfer),
+		outbound:      make(map[string]*outboundTransfer),
 	}
 
 	go c.writeLoop()

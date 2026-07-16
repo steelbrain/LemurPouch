@@ -34,8 +34,8 @@ import (
 // drift, the two sides won't agree on session keys or signatures.
 // See AGENTS.md "Wire Protocol > Domain Separators".
 const (
-	BindContext = "lemur-pouch/v1/bind-x25519:"
-	SessionInfo = "lemur-pouch/v1/session:"
+	BindContext = "LemurPouch/v1/bind-x25519:"
+	SessionInfo = "LemurPouch/v1/session:"
 )
 
 // canonicalWordList is a package-private snapshot of the BIP-39 English

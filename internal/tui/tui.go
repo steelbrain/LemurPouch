@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/steelbrain/lemur-pouch/internal/client"
+	"github.com/steelbrain/LemurPouch/internal/client"
 )
 
 type peerState int
@@ -48,6 +48,10 @@ type xfer struct {
 	done     int64
 	total    int64
 	detail   string // path on done, reason on failed
+	// Rate EMA (bytes/sec) for streaming transfers.
+	rateBps    float64
+	lastProgAt int64 // unix nano of last progress sample
+	lastDone   int64
 }
 
 type model struct {

@@ -8,10 +8,10 @@
 # image by digest (no tag claimed), then a final merge job assembles
 # all platforms — linux/amd64, linux/arm64, windows/amd64 — into one
 # multi-platform manifest list per public tag. The result: a single
-# `docker pull lemur-pouch:latest` resolves to the right per-OS+arch
+# `docker pull LemurPouch:latest` resolves to the right per-OS+arch
 # image automatically, with no Windows-specific tag suffix.
 #
-# This Dockerfile expects lemur-pouch.exe to already be present in
+# This Dockerfile expects LemurPouch.exe to already be present in
 # the build context. docker.yml's build-windows-binary job
 # cross-compiles it on a Linux runner and ships it to the windows-2022
 # runner that builds this image. Cross-compiling on Linux is much
@@ -25,7 +25,7 @@
 
 FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
 
-COPY lemur-pouch.exe C:\\lemur-pouch.exe
+COPY LemurPouch.exe C:\\LemurPouch.exe
 
 EXPOSE 8080
 
@@ -35,7 +35,7 @@ EXPOSE 8080
 # why we use a project-specific env var instead of probing /.dockerenv.
 ENV LEMURPOUCH_IN_CONTAINER=1
 
-ENTRYPOINT ["C:\\lemur-pouch.exe"]
+ENTRYPOINT ["C:\\LemurPouch.exe"]
 
 # OCI labels — mirror the Linux Dockerfile so the per-platform image
 # config carries the same metadata. The unified manifest list also
@@ -43,5 +43,5 @@ ENTRYPOINT ["C:\\lemur-pouch.exe"]
 # merge job (which is what GHCR's package page reads).
 LABEL org.opencontainers.image.title="LemurPouch"
 LABEL org.opencontainers.image.description="LemurPouch — LAN file-sharing relay (Go + React), outbound TCP only, end-to-end encrypted between paired peers."
-LABEL org.opencontainers.image.source="https://github.com/steelbrain/lemur-pouch"
+LABEL org.opencontainers.image.source="https://github.com/steelbrain/LemurPouch"
 LABEL org.opencontainers.image.licenses="MIT"

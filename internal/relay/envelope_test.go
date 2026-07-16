@@ -8,7 +8,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // makeTestEnvelope synthesizes a dummy binary envelope frame addressed

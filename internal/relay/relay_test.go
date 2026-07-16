@@ -13,8 +13,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/steelbrain/lemur-pouch/internal/cryptoid"
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/cryptoid"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // startTestRelay returns a ws:// URL pointing at a fresh in-process relay,
@@ -798,13 +798,10 @@ func TestPeerLeftNotBroadcastOnDisplacement(t *testing.T) {
 	}
 }
 
-// TestPostHandshakeReadLimit asserts the 128 KiB SetReadLimit applied at
-// connection accept also enforces during the post-handshake park loop —
-// not just during the handshake itself. A peer that sends a 192 KiB text
-// frame after welcoming must be dropped, and the hub must drain. The
-// limit was raised from 32 KiB to 128 KiB when the binary-envelope
-// routing layer landed (envelope frames carry up to 64 KiB raw chunks
-// plus 73 bytes of header + tag — see envelope.go).
+// TestPostHandshakeReadLimit asserts the SetReadLimit applied at connection
+// accept also enforces during the post-handshake park loop — not just during
+// the handshake itself. A peer that sends a frame strictly larger than
+// wireproto.ReadLimit after welcoming must be dropped, and the hub must drain.
 func TestPostHandshakeReadLimit(t *testing.T) {
 	wsURL, hub := startTestRelay(t)
 	ctx, conn, _ := completeHandshake(t, wsURL)
@@ -819,9 +816,9 @@ func TestPostHandshakeReadLimit(t *testing.T) {
 		t.Fatalf("PeerCount before oversize write = %d, want 1", got)
 	}
 
-	// 192 KiB > 128 KiB read limit. Use printable ASCII so a stray log
-	// line stays readable; content is irrelevant.
-	oversize := bytes.Repeat([]byte{'a'}, 192*1024)
+	// Strictly more than ReadLimit (AGENTS.md: tests must send more than the
+	// limit). Use printable ASCII so a stray log line stays readable.
+	oversize := bytes.Repeat([]byte{'a'}, wireproto.ReadLimit+1)
 	if err := conn.Write(ctx, websocket.MessageText, oversize); err != nil {
 		// Some platforms may surface the relay-side close before the
 		// write returns. Either ordering is acceptable as long as the
@@ -836,10 +833,10 @@ func TestPostHandshakeReadLimit(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error from conn.Read after oversize frame, got nil")
 	}
-	// Distinguish the relay-enforced 128 KiB cap from a context-deadline
-	// path: either the websocket layer reports StatusMessageTooBig as
-	// the close status, or the error message carries the read-limit
-	// signal coder/websocket emits ("read limited" / "too big").
+	// Distinguish the relay-enforced cap from a context-deadline path:
+	// either the websocket layer reports StatusMessageTooBig as the close
+	// status, or the error message carries the read-limit signal
+	// coder/websocket emits ("read limited" / "too big").
 	status := websocket.CloseStatus(err)
 	errStr := err.Error()
 	if status != websocket.StatusMessageTooBig &&
@@ -855,6 +852,28 @@ func TestPostHandshakeReadLimit(t *testing.T) {
 	}
 	if got := hub.PeerCount(); got != 0 {
 		t.Fatalf("PeerCount after oversize drop = %d, want 0", got)
+	}
+}
+
+func TestWelcomeAdvertisesMaxChunk(t *testing.T) {
+	wsURL, _ := startTestRelay(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+
+	challenge := readChallenge(t, ctx, conn)
+	id, err := cryptoid.GenerateIdentity()
+	if err != nil {
+		t.Fatalf("id: %v", err)
+	}
+	sendIdentify(t, ctx, conn, buildIdentify(id, challenge.Nonce))
+	welcome := readWelcome(t, ctx, conn)
+	if welcome.Limits == nil || welcome.Limits.MaxChunkBytes != wireproto.MaxChunkBytes {
+		t.Fatalf("welcome.limits = %+v, want max_chunk_bytes=%d", welcome.Limits, wireproto.MaxChunkBytes)
 	}
 }
 

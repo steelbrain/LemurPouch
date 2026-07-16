@@ -1,7 +1,7 @@
 // Package client implements a Go relay client: the browser-side half of the
 // LemurPouch protocol (connection handshake, discovery, friendship, encrypted
 // envelopes, and file transfers) reimplemented for a native CLI/TUI. It
-// mirrors the TypeScript client in web/src so the two interop bit-for-bit.
+// mirrors the TypeScript client in portal/src so the two interop bit-for-bit.
 //
 // A Client runs a read loop and a write loop over one outbound WebSocket to a
 // relay. State (peers, friendships, in-flight transfers) is owned by the
@@ -11,7 +11,7 @@
 // relay — AGENTS.md "Session Lifetime".
 package client
 
-import "github.com/steelbrain/lemur-pouch/internal/cryptoid"
+import "github.com/steelbrain/LemurPouch/internal/cryptoid"
 
 // PeerInfo is the client-facing view of a discovered peer. Fingerprint is the
 // six-word BIP-39 rendering of Ed25519Pub (AGENTS.md "Fingerprint"), the only

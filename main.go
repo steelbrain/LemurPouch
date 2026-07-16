@@ -15,36 +15,40 @@ import (
 	"sort"
 	"time"
 
-	"github.com/steelbrain/lemur-pouch/internal/client"
-	"github.com/steelbrain/lemur-pouch/internal/cryptoid"
-	"github.com/steelbrain/lemur-pouch/internal/relay"
-	"github.com/steelbrain/lemur-pouch/internal/tui"
+	"github.com/steelbrain/LemurPouch/internal/client"
+	"github.com/steelbrain/LemurPouch/internal/cryptoid"
+	"github.com/steelbrain/LemurPouch/internal/relay"
+	"github.com/steelbrain/LemurPouch/internal/tui"
 )
 
-//go:embed all:web/dist
+//go:embed all:portal/dist
 var distFS embed.FS
 
 // connectTimeout bounds the relay handshake when launching the TUI client.
 const connectTimeout = 15 * time.Second
 
-// serveFn / connectFn are indirected so dispatch's routing can be unit-tested
-// without starting a server or a terminal program.
+// serveFn / connectFn / pickerFn are indirected so dispatch's routing can be
+// unit-tested without starting a server or a terminal program.
 var (
 	serveFn   = runServe
 	connectFn = runConnect
+	pickerFn  = runInteractivePicker
+	// isTTY reports whether both stdin and stdout are terminals. Overridden
+	// in tests for TTY vs non-TTY bare-dispatch routing.
+	isTTY = func() bool {
+		return isTerminal(os.Stdin) && isTerminal(os.Stdout)
+	}
 )
 
 func main() {
 	os.Exit(dispatch(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// dispatch parses args and routes to one of the three modes:
-//
-//	lemur-pouch              → print help
-//	lemur-pouch --serve      → run the relay server (with --listen)
-//	lemur-pouch --connect URL → launch the full-screen TUI client (with --out)
+// dispatch parses args and routes to serve / connect / interactive picker /
+// help. Bare invocation is interactive only when stdin+stdout are both TTYs;
+// otherwise it prints help and exits 0 (Docker/scripts must never hang).
 func dispatch(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("lemur-pouch", flag.ContinueOnError)
+	fs := flag.NewFlagSet("LemurPouch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { printHelp(stderr) }
 
@@ -69,6 +73,9 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case *connect != "":
 		return connectFn(*connect, *out, stdout, stderr)
 	default:
+		if isTTY() {
+			return pickerFn(stdout, stderr)
+		}
 		printHelp(stdout)
 		return 0
 	}
@@ -78,12 +85,12 @@ func printHelp(w io.Writer) {
 	fmt.Fprint(w, `LemurPouch — a LAN file-sharing relay (lemurpouch.com)
 
 Usage:
-  lemur-pouch                  Show this help.
-  lemur-pouch --serve          Run the relay server on this machine.
-  lemur-pouch --connect URL    Connect to a relay as a full-screen TUI client.
+  LemurPouch                  Interactive picker (TTY) or this help (non-TTY).
+  LemurPouch --serve          Run the relay server on this machine.
+  LemurPouch --connect URL    Connect to a relay as a full-screen TUI client.
 
 Serve options:
-  --serve                Run the relay (serves the web client and the /ws endpoint).
+  --serve                Run the relay (serves the portal client and the /ws endpoint).
   --listen host:port     Bind address (default ":8080").
                            :8080            all interfaces, port 8080
                            127.0.0.1:8080   localhost only
@@ -94,14 +101,58 @@ Connect options (native client — no browser, low memory/CPU):
                          (http/https or ws/wss accepted; /ws is added automatically).
   --out DIR              Directory to save received files in (default: current directory).
 
+Bare invocation on a dual-TTY presents: Start a relay / Connect to a relay.
+Non-TTY (pipes, Docker, CI) prints this help and exits 0 — never hangs.
+
 In the TUI: ↑/↓ move, [c] connect to a peer, [s] send a file (you'll enter a
 path), [a]/[r] accept or reject an incoming file, [q] quit. Verify a peer by
 their six-word fingerprint before connecting.
 
 Examples:
-  lemur-pouch --serve --listen 0.0.0.0:8080
-  lemur-pouch --connect http://192.168.1.5:8080/ --out ~/Downloads
+  LemurPouch --serve --listen 0.0.0.0:8080
+  LemurPouch --connect http://192.168.1.5:8080/ --out ~/Downloads
 `)
+}
+
+// isTerminal reports whether f is a character device (TTY). Used so bare
+// LemurPouch never prompts when stdin/stdout are pipes.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// runInteractivePicker presents Start relay / Connect on a dual-TTY.
+func runInteractivePicker(stdout, stderr io.Writer) int {
+	fmt.Fprint(stdout, `LemurPouch — what do you want to do?
+
+  1) Start a relay server
+  2) Connect to a relay (TUI client)
+
+Choice [1/2]: `)
+	var choice string
+	if _, err := fmt.Fscanln(os.Stdin, &choice); err != nil {
+		fmt.Fprintln(stderr, "error: could not read choice")
+		return 1
+	}
+	switch choice {
+	case "1", "s", "S", "serve", "server":
+		return serveFn(":8080", stderr)
+	case "2", "c", "C", "connect", "client":
+		fmt.Fprint(stdout, "Relay URL (e.g. http://192.168.1.5:8080/): ")
+		var url string
+		if _, err := fmt.Fscanln(os.Stdin, &url); err != nil || url == "" {
+			fmt.Fprintln(stderr, "error: relay URL required")
+			return 1
+		}
+		// Download dir defaults to cwd (connectFn expands empty out).
+		return connectFn(url, "", stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "error: unknown choice %q (use 1 or 2)\n", choice)
+		return 1
+	}
 }
 
 // runConnect generates a session identity, connects to the relay, and runs the
@@ -155,9 +206,9 @@ func runServe(listenAddr string, stderr io.Writer) int {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", relay.HandleWebSocket(hub))
 
-	staticFS, err := fs.Sub(distFS, "web/dist")
+	staticFS, err := fs.Sub(distFS, "portal/dist")
 	if err != nil {
-		fmt.Fprintf(stderr, "error: derive web/dist sub-FS: %v\n", err)
+		fmt.Fprintf(stderr, "error: derive portal/dist sub-FS: %v\n", err)
 		return 1
 	}
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))

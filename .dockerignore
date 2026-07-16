@@ -3,12 +3,12 @@
 # and no chance of accidentally shipping host artifacts into the image.
 
 # Node / build artifacts (Stage 1 generates them fresh inside the image)
-web/node_modules
-web/dist
+portal/node_modules
+portal/dist
 
 # Go binary outputs
-/lemur-pouch
-/lemur-pouch.exe
+/LemurPouch
+/LemurPouch.exe
 
 # Per-loop transcripts from scripts/review.sh
 .review-logs
@@ -27,7 +27,7 @@ web/dist
 
 # Documentation that doesn't belong in the runtime image
 *.md
-!web/README.md   # exception: web/README.md is referenced by Vite tooling
+!portal/README.md   # exception: portal/README.md is referenced by Vite tooling
 
 # CI configuration (irrelevant to the image build)
 .github

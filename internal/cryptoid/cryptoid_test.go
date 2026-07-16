@@ -435,10 +435,12 @@ func TestKnownVectors(t *testing.T) {
 		{"ed25519_pub_b", idB.Ed25519Pub, "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"},
 		{"x25519_pub_a", idA.X25519Pub.Bytes(), "7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13"},
 		{"x25519_pub_b", idB.X25519Pub.Bytes(), "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20"},
-		{"sig_binding_a", bindA, "61e3e27fbffefa5eb5f88148bbee87711eeda8fa3e79ae31d25121f45540e5631f3ba28d39ad65f1fd10c4cfad9cb75fccfea228478a4992a054bc3b854f6a06"},
-		{"sig_binding_b", bindB, "ab55c12e425f990db56571293aa467c0ceb6425d8c1e9e663805bdd9e2d9be3bfb43928f2cdc5814a3a5ab8f1a07d725ebd0ea0f85f01a4d728e8324d5e5c10f"},
-		{"a_send_key", aSend[:], "772bfd0eaed1c76f1592b5ccbc8d3a38ff1bfae5c13f78b66cc7f8c49e926414"},
-		{"a_recv_key", aRecv[:], "04add3d2bc2e6b6c678605acada3b3e5f13cce2eaa1f06f9b09b632efb69331c"},
+		// Re-pinned after project rename (BindContext / SessionInfo use
+		// "LemurPouch/v1/…"); pub keys and fingerprints are unchanged.
+		{"sig_binding_a", bindA, "ab139c475be82663df061235f90ba673fc2bd03d538fdc1abbac7f389ea004155e859b2101245ba5c517f4042575ed60f8b7807bd4d6f31116b0b6bfe95b620e"},
+		{"sig_binding_b", bindB, "8d7dd65774c7b9a634bcf9c587d59b310fc32010f27700c06f9ddb4222591daba719a68d04abc5ff559f3bbc29d19dae59219144606befdc484a0be5f2a56b0e"},
+		{"a_send_key", aSend[:], "11182abd48889b89121dd5a5ebcacb5909d61b1af54ddb52de58c0b196a16d92"},
+		{"a_recv_key", aRecv[:], "23e9e976c36df982e2f05f997c47ee698f1e4f2a6253716f53380bc184f2253b"},
 	}
 	for _, c := range checks {
 		if got := hex.EncodeToString(c.got); got != c.want {
@@ -462,7 +464,7 @@ func TestKnownVectors(t *testing.T) {
 		t.Fatalf("aead init: %v", err)
 	}
 	fixedCT := aead.Seal(nil, fixedNonce, []byte("hello, fixed nonce"), []byte{0x01})
-	const wantFixedCT = "ce7b1bc0ea379e1c40816a28c2ae5582e2668443f176bbdf82d1556a9af56d85ea1b"
+	const wantFixedCT = "8cf5b924f35a2da205a24834a118a1ea9230e71f8a8f306db1d65bdc651ad80524bc"
 	if got := hex.EncodeToString(fixedCT); got != wantFixedCT {
 		t.Errorf("fixed-nonce ciphertext mismatch\n got:  %s\n want: %s", got, wantFixedCT)
 	}

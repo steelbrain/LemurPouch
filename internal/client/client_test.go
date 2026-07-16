@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/steelbrain/lemur-pouch/internal/cryptoid"
-	"github.com/steelbrain/lemur-pouch/internal/relay"
+	"github.com/steelbrain/LemurPouch/internal/cryptoid"
+	"github.com/steelbrain/LemurPouch/internal/relay"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // startRelay spins up an in-process relay server and returns its base URL.
@@ -282,9 +283,13 @@ func TestUniquePath(t *testing.T) {
 func TestChunkCount(t *testing.T) {
 	cases := map[int64]uint64{0: 1, 1: 1, 65536: 1, 65537: 2, 131072: 2}
 	for size, want := range cases {
-		if got := chunkCount(size); got != want {
+		if got := chunkCount(size, wireproto.ChunkDataSize); got != want {
 			t.Errorf("chunkCount(%d) = %d, want %d", size, got, want)
 		}
+	}
+	// Larger chunk size ⇒ fewer seqs; floor-based bound still covers them.
+	if got := chunkCount(2<<20, wireproto.PreferredChunkSize); got != 2 {
+		t.Errorf("1MiB chunks over 2MiB = %d, want 2", got)
 	}
 }
 

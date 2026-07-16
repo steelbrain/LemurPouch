@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/steelbrain/lemur-pouch/internal/client"
+	"github.com/steelbrain/LemurPouch/internal/client"
 )
 
 // handleEvent folds a client event into the model and re-arms the event
@@ -50,6 +52,22 @@ func (m model) handleEvent(ev client.Event) (tea.Model, tea.Cmd) {
 	case client.TransferProgress:
 		if x := m.xferByID[hexOf(e.TransferID)]; x != nil {
 			x.status = xferActive
+			now := time.Now().UnixNano()
+			if x.lastProgAt > 0 && e.BytesDone >= x.lastDone {
+				dt := float64(now-x.lastProgAt) / 1e9
+				if dt > 0 {
+					instant := float64(e.BytesDone-x.lastDone) / dt
+					// EMA τ ≈ 3 s: alpha = dt / (τ + dt)
+					if x.rateBps <= 0 {
+						x.rateBps = instant
+					} else {
+						alpha := dt / (3.0 + dt)
+						x.rateBps += alpha * (instant - x.rateBps)
+					}
+				}
+			}
+			x.lastProgAt = now
+			x.lastDone = e.BytesDone
 			x.done = e.BytesDone
 			x.total = e.Total
 		}

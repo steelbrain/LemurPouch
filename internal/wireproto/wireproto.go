@@ -74,7 +74,7 @@ type ChallengeMsg struct {
 
 // IdentifyMsg is the client's response to a ChallengeMsg.
 //   - SigLiveness = sign_ed25519(Nonce) — proves possession of ed25519_priv.
-//   - SigBinding  = sign_ed25519("lemur-pouch/v1/bind-x25519:" || x25519_pub)
+//   - SigBinding  = sign_ed25519("LemurPouch/v1/bind-x25519:" || x25519_pub)
 //     — proves x25519_pub is bound to this identity, forwardable via discovery.
 type IdentifyMsg struct {
 	Type        string `json:"type"`
@@ -84,12 +84,23 @@ type IdentifyMsg struct {
 	SigBinding  []byte `json:"sig_binding"`
 }
 
+// WelcomeLimits is the optional capability block on WelcomeMsg. Old relays
+// omit it entirely; clients treat absence as max_chunk_bytes = 64 KiB
+// (legacy floor). See AGENTS.md "Flow Control & Negotiated Limits".
+type WelcomeLimits struct {
+	// MaxChunkBytes is the largest raw chunk-data size the relay will
+	// forward. The actual SetReadLimit is larger (frame = chunk + envelope
+	// overhead + headroom).
+	MaxChunkBytes int `json:"max_chunk_bytes"`
+}
+
 // WelcomeMsg is the relay's confirmation that identification succeeded.
 // You is the relay's view of the connecting peer (including the source IP
-// and ephemeral port the relay observed).
+// and ephemeral port the relay observed). Limits is optional (omitempty).
 type WelcomeMsg struct {
-	Type string     `json:"type"`
-	You  PeerRecord `json:"you"`
+	Type   string         `json:"type"`
+	You    PeerRecord     `json:"you"`
+	Limits *WelcomeLimits `json:"limits,omitempty"`
 }
 
 // ErrorMsg is the relay's rejection of a malformed or unauthorized message.

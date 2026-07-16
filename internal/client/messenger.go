@@ -6,8 +6,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/steelbrain/lemur-pouch/internal/cryptoid"
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/cryptoid"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // sealAndSend encrypts plaintext under the friendship send key and writes a

@@ -8,7 +8,7 @@ import (
 // Transfer-control messages — the inner-type 0x01 (JSON control) payloads
 // that ride encrypted inside binary envelopes once a friendship exists. See
 // AGENTS.md "Encrypted Envelopes > Inner type 0x01 — JSON control". The
-// relay never sees these; they are the TS `web/src/transfer/control.ts`
+// relay never sees these; they are the TS `portal/src/transfer/control.ts`
 // shapes mirrored Go-side so a Go client and the browser interop.
 //
 // Field names are snake_case on the wire (matching the TS encoder and Go's
@@ -21,6 +21,7 @@ const (
 	TypeTransferAccept = "transfer-accept"
 	TypeTransferReject = "transfer-reject"
 	TypeTransferEnd    = "transfer-end"
+	TypeTransferAck    = "transfer-ack"
 )
 
 // Fixed byte lengths for transfer-control fields.
@@ -43,9 +44,23 @@ type TransferOffer struct {
 }
 
 // TransferAccept is the recipient's consent to receive the offered file.
+// MaxChunkBytes and WindowBytes are optional receiver-capacity ads: absent
+// (or 0 after parse) means legacy 64 KiB chunks with unwindowed streaming.
+// Pointers so omitempty drops them for old-style accepts and so a missing
+// JSON field is distinguishable from an explicit zero.
 type TransferAccept struct {
-	Type       string `json:"type"`
-	TransferID []byte `json:"transfer_id"`
+	Type          string `json:"type"`
+	TransferID    []byte `json:"transfer_id"`
+	MaxChunkBytes *int   `json:"max_chunk_bytes,omitempty"`
+	WindowBytes   *int   `json:"window_bytes,omitempty"`
+}
+
+// TransferAck is a cumulative receiver→sender progress signal used for
+// windowed flow control. ReceivedBytes is monotonic and idempotent.
+type TransferAck struct {
+	Type          string `json:"type"`
+	TransferID    []byte `json:"transfer_id"`
+	ReceivedBytes int64  `json:"received_bytes"`
 }
 
 // TransferReject declines the offer. Reason is optional human-readable
@@ -74,11 +89,34 @@ func MarshalTransferOffer(transferID []byte, filename string, size int64) ([]byt
 	return json.Marshal(TransferOffer{Type: TypeTransferOffer, TransferID: transferID, Filename: filename, Size: size})
 }
 
-func MarshalTransferAccept(transferID []byte) ([]byte, error) {
+// MarshalTransferAccept builds a transfer-accept. Pass nil for maxChunk/window
+// to emit a legacy accept (no capacity fields). Non-nil values are floored
+// at ChunkDataSize for maxChunk; window is left as-is (0 is meaningful only
+// when the field is present — callers that want windowing pass a positive).
+func MarshalTransferAccept(transferID []byte, maxChunkBytes, windowBytes *int) ([]byte, error) {
 	if len(transferID) != TransferIDLen {
 		return nil, fmt.Errorf("wireproto: transfer_id must be %d bytes, got %d", TransferIDLen, len(transferID))
 	}
-	return json.Marshal(TransferAccept{Type: TypeTransferAccept, TransferID: transferID})
+	m := TransferAccept{Type: TypeTransferAccept, TransferID: transferID}
+	if maxChunkBytes != nil {
+		v := FloorChunkSize(*maxChunkBytes)
+		m.MaxChunkBytes = &v
+	}
+	if windowBytes != nil {
+		v := *windowBytes
+		m.WindowBytes = &v
+	}
+	return json.Marshal(m)
+}
+
+func MarshalTransferAck(transferID []byte, receivedBytes int64) ([]byte, error) {
+	if len(transferID) != TransferIDLen {
+		return nil, fmt.Errorf("wireproto: transfer_id must be %d bytes, got %d", TransferIDLen, len(transferID))
+	}
+	if receivedBytes < 0 {
+		return nil, fmt.Errorf("wireproto: received_bytes must be non-negative, got %d", receivedBytes)
+	}
+	return json.Marshal(TransferAck{Type: TypeTransferAck, TransferID: transferID, ReceivedBytes: receivedBytes})
 }
 
 func MarshalTransferReject(transferID []byte, reason string) ([]byte, error) {
@@ -128,6 +166,30 @@ func ParseTransferAccept(data []byte) (TransferAccept, error) {
 	}
 	if len(m.TransferID) != TransferIDLen {
 		return TransferAccept{}, fmt.Errorf("wireproto: transfer_id must be %d bytes, got %d", TransferIDLen, len(m.TransferID))
+	}
+	if m.MaxChunkBytes != nil {
+		v := FloorChunkSize(*m.MaxChunkBytes)
+		m.MaxChunkBytes = &v
+	}
+	if m.WindowBytes != nil && *m.WindowBytes < 0 {
+		return TransferAccept{}, fmt.Errorf("wireproto: window_bytes must be non-negative, got %d", *m.WindowBytes)
+	}
+	return m, nil
+}
+
+func ParseTransferAck(data []byte) (TransferAck, error) {
+	var m TransferAck
+	if err := json.Unmarshal(data, &m); err != nil {
+		return TransferAck{}, fmt.Errorf("wireproto: parse transfer-ack: %w", err)
+	}
+	if m.Type != TypeTransferAck {
+		return TransferAck{}, fmt.Errorf("wireproto: expected %q, got %q", TypeTransferAck, m.Type)
+	}
+	if len(m.TransferID) != TransferIDLen {
+		return TransferAck{}, fmt.Errorf("wireproto: transfer_id must be %d bytes, got %d", TransferIDLen, len(m.TransferID))
+	}
+	if m.ReceivedBytes < 0 {
+		return TransferAck{}, fmt.Errorf("wireproto: received_bytes must be non-negative, got %d", m.ReceivedBytes)
 	}
 	return m, nil
 }

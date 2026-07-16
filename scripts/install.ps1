@@ -8,8 +8,8 @@
 
 $ErrorActionPreference = 'Stop'
 
-$Repo       = 'steelbrain/lemur-pouch'
-$BinaryName = 'lemur-pouch.exe'
+$Repo       = 'steelbrain/LemurPouch'
+$BinaryName = 'LemurPouch.exe'
 
 # --- Platform detection -----------------------------------------------------
 
@@ -23,7 +23,7 @@ $osArch = switch -Regex ($rawArch) {
     default { throw "Unsupported Windows architecture: $rawArch" }
 }
 
-$Asset    = "lemur-pouch-windows-$osArch.zip"
+$Asset    = "LemurPouch-windows-$osArch.zip"
 $BaseUrl  = "https://github.com/$Repo/releases/latest/download"
 
 # --- Install location (~/.local/bin = per-user, no admin needed) ------------
@@ -41,7 +41,7 @@ if ((Test-Path -LiteralPath $BinPath) -and -not $env:LP_FORCE) {
 } else {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
-    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "lemur-pouch-$([guid]::NewGuid())"
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "LemurPouch-$([guid]::NewGuid())"
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
     try {
         $tmpZip   = Join-Path $tmpDir $Asset
@@ -85,12 +85,23 @@ if ((Test-Path -LiteralPath $BinPath) -and -not $env:LP_FORCE) {
 Write-Host ''
 Write-Host "Installed at: $BinPath"
 Write-Host ''
+
+# Client mode: if --connect is among the forwarded args, run the binary
+# as-is (do not force --serve). Note: `irm | iex` cannot forward args at
+# all — Windows client mode uses download-then-run from the README.
+if ($args -contains '--connect') {
+    Write-Host 'Starting LemurPouch client (Ctrl-C to stop)...'
+    Write-Host ''
+    & $BinPath @args
+    exit $LASTEXITCODE
+}
+
 Write-Host 'Starting the LemurPouch relay (Ctrl-C to stop)...'
 Write-Host "To connect a TUI client instead, run: $BinPath --connect <relay-url>"
 Write-Host ''
 
 # Default to running the relay server (the installer's purpose). A bare
-# `lemur-pouch` now prints help, so pass --serve explicitly; any extra args
-# (e.g. --listen 0.0.0.0:9000) are forwarded after it.
+# `LemurPouch` prints help / picker, so pass --serve explicitly; any extra
+# args (e.g. --listen 0.0.0.0:9000) are forwarded after it.
 & $BinPath --serve @args
 exit $LASTEXITCODE

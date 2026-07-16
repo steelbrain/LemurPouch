@@ -31,28 +31,28 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: portal/package-lock.json
 
       - name: Install dependencies
-        working-directory: web
+        working-directory: portal
         run: npm ci
 
       - name: Build frontend
-        working-directory: web
+        working-directory: portal
         run: npm run build
 
-      # vite empties web/dist/ before each build, removing the
+      # vite empties portal/dist/ before each build, removing the
       # .gitkeep sentinel that lets //go:embed compile from a fresh
       # clone. Restore it before uploading so the binary jobs can
-      # `go:embed all:web/dist` without surprises.
+      # `go:embed all:portal/dist` without surprises.
       - name: Restore .gitkeep
-        run: touch web/dist/.gitkeep
+        run: touch portal/dist/.gitkeep
 
-      - name: Upload web/dist
+      - name: Upload portal/dist
         uses: actions/upload-artifact@v4
         with:
-          name: web-dist
-          path: web/dist
+          name: portal-dist
+          path: portal/dist
           retention-days: 1
 
   build-binaries:
@@ -79,11 +79,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Download web/dist
+      - name: Download portal/dist
         uses: actions/download-artifact@v4
         with:
-          name: web-dist
-          path: web/dist
+          name: portal-dist
+          path: portal/dist
 
       # CGO=0 keeps every target a single static binary with no libc
       # dependency. None of our deps need cgo (verified: stdlib +
@@ -96,7 +96,7 @@ jobs:
         run: |
           mkdir -p out
           go build -trimpath -ldflags="-s -w" \
-            -o "out/lemur-pouch${{ matrix.ext }}" .
+            -o "out/LemurPouch${{ matrix.ext }}" .
 
       - name: Package archive
         env:
@@ -106,12 +106,12 @@ jobs:
           EXT: ${{ matrix.ext }}
         run: |
           set -euo pipefail
-          name="lemur-pouch-${OS}-${ARCH}"
+          name="LemurPouch-${OS}-${ARCH}"
           mkdir -p dist
           if [ "$ARCHIVE" = "zip" ]; then
-            (cd out && zip -j "../dist/${name}.zip" "lemur-pouch${EXT}")
+            (cd out && zip -j "../dist/${name}.zip" "LemurPouch${EXT}")
           else
-            tar -C out -czf "dist/${name}.tar.gz" "lemur-pouch${EXT}"
+            tar -C out -czf "dist/${name}.tar.gz" "LemurPouch${EXT}"
           fi
           (cd dist && sha256sum "${name}.${ARCHIVE}" \
             > "${name}.${ARCHIVE}.sha256")
@@ -119,10 +119,10 @@ jobs:
       - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
-          name: lemur-pouch-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: LemurPouch-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
-            dist/lemur-pouch-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive }}
-            dist/lemur-pouch-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive }}.sha256
+            dist/LemurPouch-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive }}
+            dist/LemurPouch-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive }}.sha256
           retention-days: 90
 
   release:
@@ -137,7 +137,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: lemur-pouch-*
+          pattern: LemurPouch-*
           merge-multiple: true
 
       # Combine the per-archive .sha256 sidecars from each matrix cell
@@ -154,8 +154,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/lemur-pouch-*.tar.gz
-            dist/lemur-pouch-*.zip
+            dist/LemurPouch-*.tar.gz
+            dist/LemurPouch-*.zip
             dist/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true

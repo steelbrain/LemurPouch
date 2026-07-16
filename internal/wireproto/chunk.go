@@ -8,17 +8,18 @@ import (
 // File-chunk binary format — the inner-type 0x02 payload that rides
 // encrypted inside binary envelopes during a transfer's streaming phase. See
 // AGENTS.md "Encrypted Envelopes > Inner type 0x02 — file chunk". Mirrors the
-// TS `web/src/transfer/chunk.ts` layout so a Go client and the browser interop.
+// TS `portal/src/transfer/chunk.ts` layout so a Go client and the browser interop.
 //
 //	[ 16 bytes] transfer_id
 //	[ 4 bytes ] seq (uint32 big-endian)
 //	[ 1 byte  ] flags  (bit 0 = last chunk)
-//	[ N bytes ] raw file data       (target 64 KB raw per chunk)
+//	[ N bytes ] raw file data       (negotiated size, floor 64 KiB)
 const (
 	ChunkHeaderLen = TransferIDLen + 4 + 1 // 21
-	// ChunkDataSize is the sender's target raw bytes per chunk (last chunk
-	// may be smaller). 64 KiB keeps a raw chunk + envelope header/tag under
-	// the relay's 128 KiB SetReadLimit.
+	// ChunkDataSize is the legacy / floor raw bytes per chunk. Negotiated
+	// transfers may use larger sizes (up to MaxChunkBytes); receivers bound
+	// seq by ceil(total / ChunkDataSize) so larger chunks still validate.
+	// See AGENTS.md "Flow Control & Negotiated Limits".
 	ChunkDataSize = 64 * 1024
 	// ChunkFlagLast marks the final chunk of a transfer.
 	ChunkFlagLast byte = 0x01

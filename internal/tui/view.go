@@ -9,7 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/steelbrain/lemur-pouch/internal/client"
+	"github.com/steelbrain/LemurPouch/internal/client"
 )
 
 var (
@@ -104,7 +104,17 @@ func renderXfer(x *xfer) string {
 		}
 		return fmt.Sprintf("%s %s  awaiting accept", arrow, x.filename)
 	case xferActive:
-		return fmt.Sprintf("%s %s  %s  %s", arrow, x.filename, pct(x.done, x.total), progress(x.done, x.total))
+		rateEta := ""
+		if x.rateBps > 0 {
+			remaining := x.total - x.done
+			eta := "—"
+			if remaining > 0 {
+				secs := float64(remaining) / x.rateBps
+				eta = formatDuration(secs)
+			}
+			rateEta = fmt.Sprintf("  %s  ETA %s", humanRate(x.rateBps), eta)
+		}
+		return fmt.Sprintf("%s %s  %s  %s%s", arrow, x.filename, pct(x.done, x.total), progress(x.done, x.total), rateEta)
 	case xferDone:
 		if x.dir == client.Inbound {
 			return friendStyle.Render(fmt.Sprintf("%s %s  done → %s", arrow, x.filename, x.detail))
@@ -221,4 +231,27 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+func humanRate(bps float64) string {
+	if bps < 1024 {
+		return fmt.Sprintf("%.0f B/s", bps)
+	}
+	return humanBytes(int64(bps)) + "/s"
+}
+
+func formatDuration(secs float64) string {
+	if secs < 1 {
+		return "<1s"
+	}
+	if secs < 60 {
+		return fmt.Sprintf("%.0fs", secs)
+	}
+	m := int(secs) / 60
+	s := int(secs) % 60
+	if m < 60 {
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	h := m / 60
+	return fmt.Sprintf("%dh %dm", h, m%60)
 }

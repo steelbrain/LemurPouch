@@ -3,7 +3,7 @@
 #
 #   ./scripts/dev.sh
 #
-# Re-runs `npm install` in web/ first (idempotent). Streams labeled output
+# Re-runs `npm install` in portal/ first (idempotent). Streams labeled output
 # from both servers. Ctrl-C tears everything down.
 
 set -euo pipefail
@@ -12,8 +12,8 @@ set +m  # quiet bash's "Terminated: 15" job-control notifications on cleanup
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "[dev] installing web/ dependencies..."
-(cd web && npm install)
+echo "[dev] installing portal/ dependencies..."
+(cd portal && npm install)
 
 # Bounded to a process tree we own so we never touch processes that
 # just happen to be on :8080 / :5173 (e.g. another dev shell the user
@@ -55,7 +55,7 @@ echo "[dev] starting relay (:8080) and vite (:5173). Ctrl-C to stop."
 
 (go run . --serve 2>&1 | prefix "relay") &
 RELAY_SUBSHELL=$!
-(cd web && npm run dev 2>&1 | prefix "vite") &
+(cd portal && npm run dev 2>&1 | prefix "vite") &
 VITE_SUBSHELL=$!
 
 wait

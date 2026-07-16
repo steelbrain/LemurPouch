@@ -11,7 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // friendshipWriteTimeout caps how long a single async friendship-notification

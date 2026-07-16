@@ -21,8 +21,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/steelbrain/lemur-pouch/internal/cryptoid"
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/cryptoid"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // handshakeReadTimeout caps how long the relay will wait for the client's
@@ -275,16 +275,12 @@ func HandleWebSocket(hub *Hub) http.HandlerFunc {
 		defer conn.CloseNow()
 
 		// Cap inbound frames for the connection's lifetime. Sized to fit
-		// the largest expected envelope frame: a 64 KiB raw file chunk
-		// plus the 57-byte envelope header plus the 16-byte Poly1305 tag
-		// (AGENTS.md "Encrypted Envelopes (binary frames)"). 128 KiB
-		// gives ~2x headroom and keeps the per-conn read buffer bounded
-		// so a misbehaving peer can't pin the relay with arbitrary-size
-		// frames. The limit applies to both text (control) and binary
-		// (envelope) frames — text-only payloads are tiny so the only
-		// thing that came close to 32 KiB was the future envelope frame,
-		// which is now what justifies this limit.
-		conn.SetReadLimit(128 * 1024)
+		// the largest negotiated envelope: MaxChunkBytes raw chunk data
+		// plus envelope header/tag + chunk header, with headroom
+		// (wireproto.ReadLimit = 4 MiB). Trade-off: per-conn transient
+		// buffer exposure is ReadLimit × connections; acceptable for a
+		// LAN relay. See AGENTS.md "Flow Control & Negotiated Limits".
+		conn.SetReadLimit(int64(wireproto.ReadLimit))
 
 		ctx := r.Context()
 
@@ -546,8 +542,14 @@ func handshake(ctx context.Context, conn *websocket.Conn, remoteAddr string) (*P
 		Port:       port,
 	}
 
-	// 5. Send welcome.
-	welcome, err := wireproto.MarshalWelcome(wireproto.WelcomeMsg{You: record})
+	// 5. Send welcome, advertising the max raw chunk size this relay will
+	// forward so clients can negotiate above the legacy 64 KiB floor.
+	welcome, err := wireproto.MarshalWelcome(wireproto.WelcomeMsg{
+		You: record,
+		Limits: &wireproto.WelcomeLimits{
+			MaxChunkBytes: wireproto.MaxChunkBytes,
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal welcome: %w", err)
 	}

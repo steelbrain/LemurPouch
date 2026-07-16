@@ -10,15 +10,15 @@
 
 set -eu
 
-REPO="steelbrain/lemur-pouch"
-BINARY_NAME="lemur-pouch"
+REPO="steelbrain/LemurPouch"
+BINARY_NAME="LemurPouch"
 
 # --- Platform detection -----------------------------------------------------
 
 case "$(uname -s)" in
     Linux)                os="linux";   archive_ext="tar.gz" ;;
     Darwin)               os="darwin";  archive_ext="tar.gz" ;;
-    MINGW*|MSYS*|CYGWIN*) os="windows"; archive_ext="zip"; BINARY_NAME="lemur-pouch.exe" ;;
+    MINGW*|MSYS*|CYGWIN*) os="windows"; archive_ext="zip"; BINARY_NAME="LemurPouch.exe" ;;
     *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
@@ -26,12 +26,12 @@ case "$(uname -m)" in
     arm64|aarch64) arch="arm64" ;;
     *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
-asset="lemur-pouch-${os}-${arch}.${archive_ext}"
+asset="LemurPouch-${os}-${arch}.${archive_ext}"
 
 # --- Install location -------------------------------------------------------
 #
 # ~/.local/bin is the XDG convention for user-installed executables and is on
-# PATH in most modern shells, so the binary is runnable as `lemur-pouch`
+# PATH in most modern shells, so the binary is runnable as `LemurPouch`
 # afterward (on every OS — macOS no longer hides it under Application Support).
 
 install_dir="$HOME/.local/bin"
@@ -45,7 +45,7 @@ if [ -e "$bin_path" ] && [ -z "${LP_FORCE:-}" ]; then
 else
     mkdir -p "$install_dir"
 
-    tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t lemur-pouch)
+    tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t LemurPouch)
     trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
     archive_path="$tmp_dir/$asset"
@@ -113,11 +113,38 @@ fi
 echo ""
 echo "Installed at: $bin_path"
 echo ""
+
+# Detect client mode: if the user forwarded --connect, run the TUI client
+# instead of the relay. Under curl|sh the pipe owns stdin, so reattach
+# /dev/tty for bubbletea when available.
+wants_connect=0
+for arg in "$@"; do
+    if [ "$arg" = "--connect" ]; then
+        wants_connect=1
+        break
+    fi
+done
+
+if [ "$wants_connect" -eq 1 ]; then
+    if (exec </dev/tty) 2>/dev/null; then
+        echo "Starting LemurPouch client (Ctrl-C to stop)..."
+        echo ""
+        exec "$bin_path" "$@" </dev/tty
+    else
+        echo "Installed. No controlling TTY available for client mode."
+        echo "Run: $bin_path $*"
+        echo ""
+        exit 0
+    fi
+fi
+
 echo "Starting the LemurPouch relay (Ctrl-C to stop)..."
-echo "To connect a TUI client instead, run: $bin_path --connect <relay-url>"
+echo "To connect a TUI client instead:"
+echo "  curl -fsSL …/install.sh | sh -s -- --connect http://HOST:8080/"
+echo "  # or: $bin_path --connect http://HOST:8080/"
 echo ""
 
 # Default to running the relay server (the installer's purpose). A bare
-# `lemur-pouch` now prints help, so pass --serve explicitly; any extra args
-# (e.g. --listen 0.0.0.0:9000) are forwarded after it.
+# `LemurPouch` prints help / picker, so pass --serve explicitly; any extra
+# args (e.g. --listen 0.0.0.0:9000) are forwarded after it.
 exec "$bin_path" --serve "$@"

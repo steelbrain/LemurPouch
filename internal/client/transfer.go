@@ -11,8 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 type transferStatus int
@@ -35,6 +36,11 @@ type outboundTransfer struct {
 	sent     int64
 	status   transferStatus
 	aborted  bool
+	// Windowed flow control (0 window = legacy unwindowed).
+	chunkSize int
+	window    int
+	lastAck   int64
+	ackCond   *sync.Cond // signaled when lastAck advances or abort
 }
 
 type inboundTransfer struct {
@@ -56,6 +62,15 @@ type inboundTransfer struct {
 	lastSeq     uint32
 	expectedSha []byte
 	digest      []byte
+	// Receiver-side flow control bookkeeping.
+	window     int
+	lastAcked  int64
+	chunkFloor int // for seq bound; always ChunkDataSize for interoperability
+	// idleTimer aborts the receive if the peer stops making progress
+	// (no accepted chunk / transfer-end) for stallTimeout. Prevents a
+	// half-finished transfer from sitting in the UI forever when the
+	// sender deadlocks or disconnects without a clean peer-left.
+	idleTimer *time.Timer
 }
 
 // SendFile offers the file at path to the friend peerEd25519 and, once
@@ -125,7 +140,7 @@ func (c *Client) handleTransferControl(from PeerInfo, plaintext []byte) {
 			c.emit(ClientError{Err: err})
 			return
 		}
-		c.handleTransferAccept(from, m.TransferID)
+		c.handleTransferAccept(from, m)
 	case wireproto.TypeTransferReject:
 		m, err := wireproto.ParseTransferReject(plaintext)
 		if err != nil {
@@ -140,6 +155,15 @@ func (c *Client) handleTransferControl(from PeerInfo, plaintext []byte) {
 			return
 		}
 		c.handleTransferEnd(m.TransferID, m.SHA256)
+	case wireproto.TypeTransferAck:
+		m, err := wireproto.ParseTransferAck(plaintext)
+		if err != nil {
+			c.emit(ClientError{Err: err})
+			return
+		}
+		c.handleTransferAck(from, m)
+		// Unknown types fall through silently — additive interop with older
+		// peers that may one day send new control messages.
 	}
 }
 
@@ -151,11 +175,12 @@ func (c *Client) handleOffer(from PeerInfo, m wireproto.TransferOffer) {
 		return // duplicate transfer id — drop
 	}
 	it := &inboundTransfer{
-		peer:     from,
-		filename: m.Filename,
-		size:     m.Size,
-		status:   statusOffered,
-		pending:  make(map[uint32][]byte),
+		peer:       from,
+		filename:   m.Filename,
+		size:       m.Size,
+		status:     statusOffered,
+		pending:    make(map[uint32][]byte),
+		chunkFloor: wireproto.ChunkDataSize,
 	}
 	copy(it.id[:], m.TransferID)
 	c.inbound[idHex] = it
@@ -194,11 +219,22 @@ func (c *Client) AcceptTransfer(transferID []byte) error {
 	it.finalPath = finalPath
 	it.hasher = sha256.New()
 	it.status = statusStreaming
+	// Advertise our capacity so a new sender can use big chunks + windowing.
+	// Old senders ignore unknown fields and drop unknown 0x01 types (acks).
+	maxChunk := wireproto.MaxChunkBytes
+	if c.maxChunkBytes > 0 && c.maxChunkBytes < maxChunk {
+		maxChunk = c.maxChunkBytes
+	}
+	window := wireproto.DefaultWindowBytes
+	it.window = wireproto.EffectiveWindow(window, wireproto.NegotiateChunkSize(
+		wireproto.PreferredChunkSize, c.maxChunkBytes, maxChunk,
+	))
+	c.armInboundIdle(it)
 	peer := it.peer
 	size := it.size
 	it.mu.Unlock()
 
-	accept, err := wireproto.MarshalTransferAccept(transferID)
+	accept, err := wireproto.MarshalTransferAccept(transferID, &maxChunk, &window)
 	if err != nil {
 		return fmt.Errorf("marshal accept: %w", err)
 	}
@@ -232,8 +268,8 @@ func (c *Client) RejectTransfer(transferID []byte, reason string) error {
 	return nil
 }
 
-func (c *Client) handleTransferAccept(from PeerInfo, transferID []byte) {
-	idHex := hex.EncodeToString(transferID)
+func (c *Client) handleTransferAccept(from PeerInfo, m wireproto.TransferAccept) {
+	idHex := hex.EncodeToString(m.TransferID)
 	c.mu.Lock()
 	ot, ok := c.outbound[idHex]
 	c.mu.Unlock()
@@ -246,10 +282,47 @@ func (c *Client) handleTransferAccept(from PeerInfo, transferID []byte) {
 		ot.mu.Unlock()
 		return
 	}
+	acceptMax := 0
+	if m.MaxChunkBytes != nil {
+		acceptMax = *m.MaxChunkBytes
+	}
+	windowAd := 0
+	if m.WindowBytes != nil {
+		windowAd = *m.WindowBytes
+	}
+	ot.chunkSize = wireproto.NegotiateChunkSize(wireproto.PreferredChunkSize, c.maxChunkBytes, acceptMax)
+	ot.window = wireproto.EffectiveWindow(windowAd, ot.chunkSize)
+	ot.lastAck = 0
+	ot.ackCond = sync.NewCond(&ot.mu)
 	ot.status = statusStreaming
 	ot.mu.Unlock()
-	c.emit(TransferStarted{TransferID: transferID, Direction: Outbound, Filename: ot.filename, Size: ot.size})
+	c.emit(TransferStarted{TransferID: m.TransferID, Direction: Outbound, Filename: ot.filename, Size: ot.size})
 	go c.streamFile(ot)
+}
+
+func (c *Client) handleTransferAck(from PeerInfo, m wireproto.TransferAck) {
+	idHex := hex.EncodeToString(m.TransferID)
+	c.mu.Lock()
+	ot, ok := c.outbound[idHex]
+	c.mu.Unlock()
+	if !ok {
+		return
+	}
+	ot.mu.Lock()
+	defer ot.mu.Unlock()
+	if !bytesEqual(ot.peer.Ed25519Pub, from.Ed25519Pub) {
+		return
+	}
+	if ot.window <= 0 {
+		return // unwindowed: ignore acks
+	}
+	if m.ReceivedBytes < ot.lastAck {
+		return // non-monotonic — ignore
+	}
+	ot.lastAck = m.ReceivedBytes
+	if ot.ackCond != nil {
+		ot.ackCond.Broadcast()
+	}
 }
 
 func (c *Client) handleTransferReject(from PeerInfo, transferID []byte, reason string) {
@@ -279,9 +352,10 @@ func (c *Client) handleTransferReject(from PeerInfo, transferID []byte, reason s
 	c.emit(TransferFailed{TransferID: transferID, Direction: Outbound, Filename: filename, Reason: reason})
 }
 
-// streamFile reads the source file in 64 KiB chunks, encrypts and sends each,
-// folds the bytes into a running SHA-256, then sends transfer-end with the
-// finalized digest.
+// streamFile reads the source file in negotiated-size chunks, encrypts and
+// sends each, folds the bytes into a running SHA-256, then sends transfer-end
+// with the finalized digest. When the accept carried a window, blocks while
+// in-flight ≥ window and aborts after StallTimeoutSec without ack progress.
 func (c *Client) streamFile(ot *outboundTransfer) {
 	fail := func(reason string) {
 		ot.mu.Lock()
@@ -292,6 +366,10 @@ func (c *Client) streamFile(ot *outboundTransfer) {
 			return
 		}
 		ot.status = statusFailed
+		ot.aborted = true
+		if ot.ackCond != nil {
+			ot.ackCond.Broadcast()
+		}
 		ot.mu.Unlock()
 		c.emit(TransferFailed{TransferID: ot.id[:], Direction: Outbound, Filename: ot.filename, Reason: reason})
 	}
@@ -303,8 +381,16 @@ func (c *Client) streamFile(ot *outboundTransfer) {
 	}
 	defer f.Close()
 
+	ot.mu.Lock()
+	chunkSize := ot.chunkSize
+	if chunkSize <= 0 {
+		chunkSize = wireproto.ChunkDataSize
+	}
+	window := ot.window
+	ot.mu.Unlock()
+
 	hasher := sha256.New()
-	buf := make([]byte, wireproto.ChunkDataSize)
+	buf := make([]byte, chunkSize)
 	var seq uint32
 	var sent int64
 	for {
@@ -324,6 +410,15 @@ func (c *Client) streamFile(ot *outboundTransfer) {
 		var flags byte
 		if isLast {
 			flags = wireproto.ChunkFlagLast
+		}
+
+		// Windowed: wait until in-flight leaves room for this chunk (or
+		// abort on stall / peer disconnect).
+		if window > 0 {
+			if err := c.waitForWindow(ot, int64(n)); err != nil {
+				fail(err.Error())
+				return
+			}
 		}
 
 		ot.mu.Lock()
@@ -371,6 +466,52 @@ func (c *Client) streamFile(ot *outboundTransfer) {
 	c.emit(TransferComplete{TransferID: ot.id[:], Direction: Outbound, Filename: ot.filename})
 }
 
+// stallTimeout is how long waitForWindow waits for ack progress before
+// returning "flow-control stall". Overridable in tests (defaults to
+// wireproto.StallTimeoutSec).
+var stallTimeout = time.Duration(wireproto.StallTimeoutSec) * time.Second
+
+// waitForWindow blocks until sending n more bytes would fit under the
+// window, or returns an error on abort / stallTimeout without ack progress.
+// Caller must not hold ot.mu.
+func (c *Client) waitForWindow(ot *outboundTransfer, n int64) error {
+	ot.mu.Lock()
+	defer ot.mu.Unlock()
+	if ot.ackCond == nil {
+		return nil
+	}
+	deadline := time.Now().Add(stallTimeout)
+	lastSeenAck := ot.lastAck
+	for {
+		if ot.aborted || ot.status == statusFailed {
+			return errors.New("transfer aborted")
+		}
+		// Room for this chunk?
+		if !wireproto.WindowFull(ot.sent+n, ot.lastAck, ot.window) {
+			return nil
+		}
+		// Ack advanced since we started waiting — reset the stall clock.
+		if ot.lastAck > lastSeenAck {
+			lastSeenAck = ot.lastAck
+			deadline = time.Now().Add(stallTimeout)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return errors.New("flow-control stall")
+		}
+		// Timed wait via a one-shot timer that broadcasts the cond.
+		timer := time.AfterFunc(remaining, func() {
+			ot.mu.Lock()
+			if ot.ackCond != nil {
+				ot.ackCond.Broadcast()
+			}
+			ot.mu.Unlock()
+		})
+		ot.ackCond.Wait()
+		timer.Stop()
+	}
+}
+
 // handleChunk folds an inbound file chunk into its transfer's assembler,
 // writing in-order bytes to disk and verifying length/order invariants.
 func (c *Client) handleChunk(plaintext []byte) {
@@ -392,7 +533,9 @@ func (c *Client) handleChunk(plaintext []byte) {
 		it.mu.Unlock()
 		return
 	}
-	expectedChunks := chunkCount(it.size)
+	// Seq bound uses the 64 KiB floor so larger negotiated chunks still pass
+	// (fewer seqs) and old senders remain valid.
+	expectedChunks := chunkCount(it.size, it.chunkFloor)
 	if uint64(chunk.Seq) >= expectedChunks {
 		c.abortInbound(it, "chunk sequence out of range")
 		it.mu.Unlock()
@@ -458,9 +601,26 @@ func (c *Client) handleChunk(plaintext []byte) {
 	}
 	received := it.received
 	total := it.size
+	needAck := wireproto.ShouldAck(it.received, it.lastAcked, it.window)
+	if needAck {
+		it.lastAcked = it.received
+	}
+	peer := it.peer
+	ackBytes := it.lastAcked
 	c.tryFinalize(it)
+	// Peer made progress (this chunk). Reset the receive-stall clock unless
+	// tryFinalize already terminalized the transfer.
+	if it.status == statusStreaming {
+		c.armInboundIdle(it)
+	}
 	it.mu.Unlock()
 	c.emitProgress(TransferProgress{TransferID: chunk.TransferID, Direction: Inbound, BytesDone: received, Total: total})
+	if needAck {
+		ack, err := wireproto.MarshalTransferAck(chunk.TransferID, ackBytes)
+		if err == nil {
+			_ = c.sealAndSend(peer.Ed25519Pub, wireproto.InnerTypeJSONControl, ack)
+		}
+	}
 }
 
 func (c *Client) handleTransferEnd(transferID, sha []byte) {
@@ -478,7 +638,41 @@ func (c *Client) handleTransferEnd(transferID, sha []byte) {
 	}
 	it.expectedSha = sha
 	c.tryFinalize(it)
+	// transfer-end is peer progress even when we still lack the last chunk.
+	if it.status == statusStreaming {
+		c.armInboundIdle(it)
+	}
 	it.mu.Unlock()
+}
+
+// stopInboundIdle cancels the receive-stall timer. Caller holds it.mu.
+func stopInboundIdle(it *inboundTransfer) {
+	if it.idleTimer != nil {
+		it.idleTimer.Stop()
+		it.idleTimer = nil
+	}
+}
+
+// armInboundIdle (re)starts the receive-stall timer. After stallTimeout with
+// no accepted chunk or transfer-end, aborts the inbound transfer. Caller
+// holds it.mu.
+func (c *Client) armInboundIdle(it *inboundTransfer) {
+	stopInboundIdle(it)
+	id := it.id
+	it.idleTimer = time.AfterFunc(stallTimeout, func() {
+		c.mu.Lock()
+		cur, ok := c.inbound[hex.EncodeToString(id[:])]
+		c.mu.Unlock()
+		if !ok || cur != it {
+			return
+		}
+		it.mu.Lock()
+		defer it.mu.Unlock()
+		if it.status != statusStreaming {
+			return
+		}
+		c.abortInbound(it, "receive stall")
+	})
 }
 
 // tryFinalize commits or fails an inbound transfer once both the locally
@@ -500,6 +694,7 @@ func (c *Client) tryFinalize(it *inboundTransfer) {
 		c.abortInbound(it, fmt.Sprintf("rename: %v", err))
 		return
 	}
+	stopInboundIdle(it)
 	it.status = statusDone
 	c.mu.Lock()
 	delete(c.inbound, hex.EncodeToString(it.id[:]))
@@ -513,6 +708,7 @@ func (c *Client) abortInbound(it *inboundTransfer, reason string) {
 	if it.status == statusFailed || it.status == statusDone {
 		return
 	}
+	stopInboundIdle(it)
 	it.status = statusFailed
 	if it.file != nil {
 		it.file.Close()
@@ -549,6 +745,9 @@ func (c *Client) failTransfersForPeer(peerHex string, reason string) {
 		if active {
 			ot.status = statusFailed
 		}
+		if ot.ackCond != nil {
+			ot.ackCond.Broadcast()
+		}
 		ot.mu.Unlock()
 		c.mu.Lock()
 		delete(c.outbound, hex.EncodeToString(ot.id[:]))
@@ -576,13 +775,18 @@ func writeInOrder(it *inboundTransfer, data []byte) error {
 	return nil
 }
 
-// chunkCount returns the number of chunks a file of the given size streams as.
-// A zero-byte file is a single empty last chunk.
-func chunkCount(size int64) uint64 {
+// chunkCount returns the number of chunks a file of the given size streams as
+// when chunked at chunkSize (defaults to ChunkDataSize). A zero-byte file is
+// a single empty last chunk. Receivers always pass the 64 KiB floor so larger
+// sender chunks stay within the bound.
+func chunkCount(size int64, chunkSize int) uint64 {
+	if chunkSize <= 0 {
+		chunkSize = wireproto.ChunkDataSize
+	}
 	if size <= 0 {
 		return 1
 	}
-	return uint64((size + wireproto.ChunkDataSize - 1) / wireproto.ChunkDataSize)
+	return uint64((size + int64(chunkSize) - 1) / int64(chunkSize))
 }
 
 // uniquePath returns a non-colliding path in dir for the given (untrusted)

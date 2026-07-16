@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 
-	"github.com/steelbrain/lemur-pouch/internal/client"
+	"github.com/steelbrain/LemurPouch/internal/client"
 )
 
 // newTestModel builds a model without a live client. handleEvent only

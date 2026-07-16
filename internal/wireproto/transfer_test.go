@@ -37,7 +37,7 @@ func TestTransferOfferRoundTrip(t *testing.T) {
 }
 
 func TestTransferAcceptRoundTrip(t *testing.T) {
-	raw, err := MarshalTransferAccept(tid())
+	raw, err := MarshalTransferAccept(tid(), nil, nil)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -47,6 +47,90 @@ func TestTransferAcceptRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(m.TransferID, tid()) {
 		t.Fatalf("round-trip mismatch: %+v", m)
+	}
+	if m.MaxChunkBytes != nil || m.WindowBytes != nil {
+		t.Fatalf("legacy accept should omit capacity fields: %+v", m)
+	}
+}
+
+func TestTransferAcceptWithLimitsRoundTrip(t *testing.T) {
+	maxC, win := PreferredChunkSize, DefaultWindowBytes
+	raw, err := MarshalTransferAccept(tid(), &maxC, &win)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Pin field names for Go-TS interop.
+	for _, want := range []string{`"max_chunk_bytes"`, `"window_bytes"`, `"transfer_id"`, `"type"`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("missing field %s in %s", want, raw)
+		}
+	}
+	m, err := ParseTransferAccept(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.MaxChunkBytes == nil || *m.MaxChunkBytes != PreferredChunkSize {
+		t.Fatalf("max_chunk_bytes = %v", m.MaxChunkBytes)
+	}
+	if m.WindowBytes == nil || *m.WindowBytes != DefaultWindowBytes {
+		t.Fatalf("window_bytes = %v", m.WindowBytes)
+	}
+}
+
+func TestTransferAcceptFloorsSubFloorChunk(t *testing.T) {
+	tiny := 1000
+	raw, err := MarshalTransferAccept(tid(), &tiny, nil)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	m, err := ParseTransferAccept(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.MaxChunkBytes == nil || *m.MaxChunkBytes != ChunkDataSize {
+		t.Fatalf("expected floor %d, got %v", ChunkDataSize, m.MaxChunkBytes)
+	}
+}
+
+func TestTransferAckRoundTrip(t *testing.T) {
+	raw, err := MarshalTransferAck(tid(), 123456789)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{`"type"`, `"transfer_id"`, `"received_bytes"`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("missing field %s in %s", want, raw)
+		}
+	}
+	m, err := ParseTransferAck(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !bytes.Equal(m.TransferID, tid()) || m.ReceivedBytes != 123456789 {
+		t.Fatalf("round-trip mismatch: %+v", m)
+	}
+}
+
+func TestParseTransferAckIgnoresUnknownFields(t *testing.T) {
+	// Additive: unknown JSON fields must not break parsers.
+	raw := []byte(`{"type":"transfer-ack","transfer_id":"AAAAAAAAAAAAAAAAAAAAAA==","received_bytes":1,"future":true}`)
+	m, err := ParseTransferAck(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.ReceivedBytes != 1 {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestParseUnknownTransferControlTypeDropped(t *testing.T) {
+	// Mirrors TS parseTransferControl returning null for unknown types.
+	raw := []byte(`{"type":"transfer-future","transfer_id":"AAAAAAAAAAAAAAAAAAAAAA=="}`)
+	if _, err := ParseTransferOffer(raw); err == nil {
+		t.Fatal("expected type mismatch")
+	}
+	if _, err := ParseTransferAck(raw); err == nil {
+		t.Fatal("expected type mismatch for ack parser")
 	}
 }
 
@@ -111,6 +195,7 @@ func TestTransferControlTypeStrings(t *testing.T) {
 		TypeTransferAccept: "transfer-accept",
 		TypeTransferReject: "transfer-reject",
 		TypeTransferEnd:    "transfer-end",
+		TypeTransferAck:    "transfer-ack",
 	}
 	for got, want := range cases {
 		if got != want {
@@ -147,8 +232,45 @@ func TestTransferEndRejectsBadInputs(t *testing.T) {
 }
 
 func TestTransferParsersRejectWrongType(t *testing.T) {
-	raw, _ := MarshalTransferAccept(tid())
+	raw, _ := MarshalTransferAccept(tid(), nil, nil)
 	if _, err := ParseTransferOffer(raw); err == nil {
 		t.Error("expected type mismatch error")
+	}
+}
+
+func TestWelcomeLimitsJSONFieldNames(t *testing.T) {
+	data, err := MarshalWelcome(WelcomeMsg{
+		You: PeerRecord{
+			Ed25519Pub: make([]byte, 32),
+			X25519Pub:  make([]byte, 32),
+			SigBinding: make([]byte, 64),
+			IP:         "10.0.0.1",
+			Port:       1,
+		},
+		Limits: &WelcomeLimits{MaxChunkBytes: MaxChunkBytes},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{`"limits"`, `"max_chunk_bytes"`} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("welcome missing %s: %s", want, data)
+		}
+	}
+	// Absent limits must omit the field (old-relay shape).
+	data2, err := MarshalWelcome(WelcomeMsg{
+		You: PeerRecord{
+			Ed25519Pub: make([]byte, 32),
+			X25519Pub:  make([]byte, 32),
+			SigBinding: make([]byte, 64),
+			IP:         "10.0.0.1",
+			Port:       1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(data2, []byte(`"limits"`)) {
+		t.Fatalf("absent limits should be omitted: %s", data2)
 	}
 }

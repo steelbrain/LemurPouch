@@ -13,17 +13,17 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # The image lives at ghcr.io/<owner>/lemur-pouch — derived from the
-  # repo's owner. Adjust if republishing under a different org.
+  # The image lives at ghcr.io/<owner>/<repo> — same name as the GitHub
+  # repo (currently LemurPouch). Tracks renames via github.repository.
   #
   # The published image is a unified multi-platform manifest list
   # spanning linux/amd64, linux/arm64, and windows/amd64. A single
-  # `docker pull lemur-pouch:latest` resolves to the right per-OS+arch
+  # `docker pull LemurPouch:latest` resolves to the right per-OS+arch
   # image automatically — Windows users do NOT need a special tag.
   # That's why this workflow has 4 jobs: build each platform's image
   # by digest only, then a merge job assembles all digests into one
   # manifest list per public tag.
-  IMAGE_NAME: ${{ github.repository_owner }}/lemur-pouch
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   # Linux platforms run as a 2-cell matrix on ubuntu-latest. Each cell
@@ -86,7 +86,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=LemurPouch
             org.opencontainers.image.description=LemurPouch — LAN file-sharing relay (Go + React), outbound TCP only, end-to-end encrypted between paired peers.
-            org.opencontainers.image.source=https://github.com/steelbrain/lemur-pouch
+            org.opencontainers.image.source=https://github.com/steelbrain/LemurPouch
 
       - name: Build and push by digest
         id: build
@@ -140,20 +140,20 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: portal/package-lock.json
 
-      - name: Install web/ deps
-        working-directory: web
+      - name: Install portal/ deps
+        working-directory: portal
         run: npm ci
 
       - name: Build frontend
-        working-directory: web
+        working-directory: portal
         run: npm run build
 
-      # vite empties web/dist before each build, removing the .gitkeep
+      # vite empties portal/dist before each build, removing the .gitkeep
       # sentinel that lets //go:embed compile from a fresh clone.
       - name: Restore .gitkeep
-        run: touch web/dist/.gitkeep
+        run: touch portal/dist/.gitkeep
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -167,13 +167,13 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: '0'
         run: |
-          go build -trimpath -ldflags="-s -w" -o lemur-pouch.exe .
+          go build -trimpath -ldflags="-s -w" -o LemurPouch.exe .
 
       - name: Upload .exe
         uses: actions/upload-artifact@v4
         with:
           name: windows-amd64-exe
-          path: lemur-pouch.exe
+          path: LemurPouch.exe
           retention-days: 1
 
   # Windows container — built on a native Windows runner because
@@ -293,7 +293,7 @@ jobs:
           retention-days: 1
 
   # Assemble all per-platform digests into one manifest list per public
-  # tag. After this job, `docker pull lemur-pouch:<tag>` resolves to
+  # tag. After this job, `docker pull LemurPouch:<tag>` resolves to
   # the right image for the host's OS+arch automatically.
   #
   # Atomicity: if any platform fails to build/push, this job doesn't
@@ -351,7 +351,7 @@ jobs:
           annotations: |
             org.opencontainers.image.title=LemurPouch
             org.opencontainers.image.description=LemurPouch — LAN file-sharing relay (Go + React), outbound TCP only, end-to-end encrypted between paired peers.
-            org.opencontainers.image.source=https://github.com/steelbrain/lemur-pouch
+            org.opencontainers.image.source=https://github.com/steelbrain/LemurPouch
           tags: |
             type=ref,event=branch
             type=ref,event=pr

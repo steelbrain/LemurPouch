@@ -6,7 +6,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/steelbrain/lemur-pouch/internal/wireproto"
+	"github.com/steelbrain/LemurPouch/internal/wireproto"
 )
 
 // envelopeWriteTimeout caps how long a single binary-envelope forward to

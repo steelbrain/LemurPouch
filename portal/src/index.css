@@ -1,0 +1,490 @@
+/* ----- Theme tokens ---------------------------------------------------- */
+/*                                                                          */
+/* Light is the default (defined in :root). Dark applies in two scenarios:  */
+/*   1. The user's OS prefers-color-scheme is dark AND no explicit override */
+/*      is set on <html data-theme="…">.                                    */
+/*   2. The user clicked the theme toggle which set data-theme="dark".      */
+/*                                                                          */
+/* The duplication between the prefers-color-scheme block and the           */
+/* [data-theme="dark"] block is intentional — CSS has no good way to share  */
+/* a value-set across rules without preprocessing.                          */
+
+:root {
+  --color-bg: #ffffff;
+  --color-bg-elevated: #f9fafb;
+  --color-bg-hover: #f3f4f6;
+  --color-text: #1f2937;
+  --color-text-muted: #6b7280;
+  --color-text-strong: #111827;
+  --color-border: #e5e7eb;
+  --color-border-strong: #d1d5db;
+  --color-accent: #1d62e8;
+  --color-accent-hover: #1854c7;
+  --color-accent-fg: #ffffff;
+  --color-accent-bg: rgba(29, 98, 232, 0.08);
+  --color-success: #0d8f70;
+  --color-success-fg: #ffffff;
+  --color-success-bg: #ecfdf5;
+  --color-success-border: #a7f3d0;
+  --color-warning: #b45309;
+  --color-warning-bg: #fffbeb;
+  --color-warning-border: #fcd34d;
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-code-bg: #f3f4f6;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md:
+    0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  color-scheme: light;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-bg: #0f1117;
+    --color-bg-elevated: #181a23;
+    --color-bg-hover: #20232e;
+    --color-text: #cbd5e1;
+    --color-text-muted: #94a3b8;
+    --color-text-strong: #f1f5f9;
+    --color-border: #2a2f3a;
+    --color-border-strong: #3b4150;
+    --color-accent: #6092f0;
+    --color-accent-hover: #7aa5f3;
+    --color-accent-fg: #0f1117;
+    --color-accent-bg: rgba(96, 146, 240, 0.12);
+    --color-success: #34d399;
+    --color-success-fg: #0f1117;
+    --color-success-bg: rgba(52, 211, 153, 0.1);
+    --color-success-border: rgba(52, 211, 153, 0.35);
+    --color-warning: #fbbf24;
+    --color-warning-bg: rgba(251, 191, 36, 0.1);
+    --color-warning-border: rgba(251, 191, 36, 0.35);
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.1);
+    --color-danger-border: rgba(248, 113, 113, 0.35);
+    --color-code-bg: #1f2128;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md:
+      0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.25);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --color-bg: #0f1117;
+  --color-bg-elevated: #181a23;
+  --color-bg-hover: #20232e;
+  --color-text: #cbd5e1;
+  --color-text-muted: #94a3b8;
+  --color-text-strong: #f1f5f9;
+  --color-border: #2a2f3a;
+  --color-border-strong: #3b4150;
+  --color-accent: #6092f0;
+  --color-accent-hover: #7aa5f3;
+  --color-accent-fg: #0f1117;
+  --color-accent-bg: rgba(96, 146, 240, 0.12);
+  --color-success: #34d399;
+  --color-success-fg: #0f1117;
+  --color-success-bg: rgba(52, 211, 153, 0.1);
+  --color-success-border: rgba(52, 211, 153, 0.35);
+  --color-warning: #fbbf24;
+  --color-warning-bg: rgba(251, 191, 36, 0.1);
+  --color-warning-border: rgba(251, 191, 36, 0.35);
+  --color-danger: #f87171;
+  --color-danger-bg: rgba(248, 113, 113, 0.1);
+  --color-danger-border: rgba(248, 113, 113, 0.35);
+  --color-code-bg: #1f2128;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md:
+    0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.25);
+  color-scheme: dark;
+}
+
+/* ----- Reset / base ---------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+#root {
+  min-height: 100svh;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+
+h2 {
+  font-size: 1.125rem;
+}
+
+h3 {
+  font-size: 1rem;
+}
+
+p {
+  margin: 0;
+}
+
+p + p {
+  margin-top: 0.5rem;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.1rem 0.35rem;
+  background: var(--color-code-bg);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-strong);
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font: inherit;
+  color: var(--color-text-strong);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms, filter 120ms;
+}
+
+/* Default (secondary) buttons only. Variant classes (.btn--primary,
+   .btn--ghost, …) own their own :hover rules with equal-or-higher
+   specificity so this doesn't paint over accent fill with elevated-gray. */
+button:hover:not(:disabled):not(.btn--primary):not(.btn--ghost) {
+  background: var(--color-bg-hover);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ----- Layout primitives ----------------------------------------------- */
+
+.app {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.app-logo {
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+
+/* Cards group sections of the connected view. .card--accent / --warning /
+   --success tint the border and background so the section's purpose is
+   immediately scannable (incoming-invite cards are warning-colored,
+   incoming-transfers are success-colored, etc). */
+.card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+  margin-top: 1.25rem;
+}
+
+.card > h2 {
+  margin-bottom: 0.75rem;
+}
+
+.card--accent {
+  border-color: var(--color-accent);
+  background: var(--color-accent-bg);
+}
+
+.card--warning {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-bg);
+}
+
+.card--success {
+  border-color: var(--color-success-border);
+  background: var(--color-success-bg);
+}
+
+/* Row containers for incoming invites / transfer offers / peer rows /
+   transfer rows. Flex with gap, wraps on narrow viewports. */
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.row-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.row-list > li + li {
+  margin-top: 0.5rem;
+}
+
+.muted {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ----- Components ------------------------------------------------------ */
+
+.btn--small {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+}
+
+.btn--primary {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  border-color: var(--color-accent);
+}
+
+/* Keep accent fill + fg on hover. Explicit token (not filter:brightness)
+   so the label stays legible and we don't lose the fill to the base
+   button:hover gray. */
+.btn--primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+  color: var(--color-accent-fg);
+}
+
+.btn--primary:disabled {
+  /* Disabled primary still reads as accent-shaped; opacity from
+     button:disabled already signals inactive. */
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  border-color: var(--color-accent);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-muted);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: transparent;
+  color: var(--color-text-strong);
+}
+
+.btn--icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* file-picker label looks like a button — hidden <input type="file"> inside */
+.file-button {
+  display: inline-block;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-strong);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+
+.file-button:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-strong);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.badge--accent {
+  background: var(--color-accent-bg);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.badge--success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-color: var(--color-success-border);
+}
+
+.badge--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-color: var(--color-warning-border);
+}
+
+.badge--danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
+}
+
+.badge--neutral {
+  background: var(--color-bg-hover);
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+/* Notice / toast-like panel for transient friendship signals. */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.notice + .notice {
+  margin-top: 0.5rem;
+}
+
+.notice__text {
+  flex: 1;
+}
+
+.transfer-row {
+  padding: 0.75rem 1rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.transfer-row + .transfer-row {
+  margin-top: 0.5rem;
+}
+
+.progress {
+  margin-top: 0.5rem;
+  height: 6px;
+  background: var(--color-bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 80ms linear;
+}
+
+.progress__fill--success {
+  background: var(--color-success);
+}
+
+.fingerprint {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--color-code-bg);
+  color: var(--color-text-strong);
+  border-radius: var(--radius-md);
+  display: inline-block;
+}
+
+.fingerprint--small {
+  font-size: 0.9rem;
+  padding: 0.15rem 0.45rem;
+}
+
+.error-banner {
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-danger);
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+}
+
+.app-footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
