@@ -59,7 +59,7 @@ const TABS: readonly TabDef[] = [
     id: "docker",
     label: "Docker",
     command:
-      "docker run --rm -p 8080:8080 ghcr.io/steelbrain/lemurpouch:latest",
+      "docker run -it --net=host --rm ghcr.io/steelbrain/lemurpouch:latest",
     note: (
       <>
         Multi-platform image: linux/amd64, linux/arm64, windows/amd64.

@@ -219,7 +219,7 @@ Workflow shape (4 jobs):
 
 The windows/amd64 cross-compile in step 2 duplicates work the `release.yml` binary matrix already does (its windows/amd64 cell ships the standalone .zip). The duplication is the price of keeping `docker.yml` self-contained; cross-workflow artifact sharing is more cost than the ~40 s of build time saved.
 
-Local sanity test: `docker build -t LemurPouch . && docker run --rm -p 8080:8080 LemurPouch`. The relay detects containerization via the `LEMURPOUCH_IN_CONTAINER` env var, which the project's `Dockerfile` sets explicitly (`ENV LEMURPOUCH_IN_CONTAINER=1`); when set, the startup banner prints an extra hint that the enumerated interface IPs are container-internal bridge addresses, not host LAN IPs. We deliberately do NOT probe `/.dockerenv` — that would also fire for users who built a custom image around the binary or `docker cp`-ed it out and re-ran it elsewhere.
+Local sanity test: `docker build -t LemurPouch . && docker run -it --net=host --rm LemurPouch`. The relay detects containerization via the `LEMURPOUCH_IN_CONTAINER` env var, which the project's `Dockerfile` sets explicitly (`ENV LEMURPOUCH_IN_CONTAINER=1`); when set, the startup banner prints an extra hint that the enumerated interface IPs are container-internal bridge addresses, not host LAN IPs. We deliberately do NOT probe `/.dockerenv` — that would also fire for users who built a custom image around the binary or `docker cp`-ed it out and re-ran it elsewhere.
 
 After the first GitHub Actions push, the package on ghcr.io is private by default. Make it public via the package settings page so anonymous `docker pull` works.
 

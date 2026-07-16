@@ -307,8 +307,9 @@ func logReachableURLs(listen string) {
 
 	// Inside a container the IPs above are container-internal (bridge
 	// addresses like 172.x.x.x) and aren't reachable from the host's
-	// LAN. Print a hint so users running `docker run -p 8080:8080 …`
-	// know to navigate to their HOST's LAN IP instead.
+	// LAN. Print a hint so users running without `--net=host`
+	// (e.g. `docker run -p 8080:8080 …`) know to navigate to their
+	// HOST's LAN IP instead.
 	//
 	// Detection is via the LEMURPOUCH_IN_CONTAINER env var, which the
 	// project's Dockerfile sets explicitly. We deliberately don't
