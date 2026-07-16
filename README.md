@@ -50,20 +50,24 @@ The full protocol, threat model, and wire format live in the [Protocol Reference
 
 ### One-line install
 
-The binary is installed to `~/.local/bin` on every platform (`~/.local/bin/LemurPouch`, or `LemurPouch.exe` on Windows) — the XDG convention for user executables, usually already on `PATH`. The installer then starts the relay (`--serve`).
+The binary is installed to `~/.local/bin` on every platform (`~/.local/bin/LemurPouch`, or `LemurPouch.exe` on Windows) — the XDG convention for user executables, usually already on `PATH`. The installer then launches bare `LemurPouch` so you can pick **Start a relay** or **Connect to a relay** (interactive picker).
 
 Re-running the script is idempotent — the download is skipped if the binary is already there. Set `LP_FORCE=1` (or `$env:LP_FORCE='1'`) to overwrite.
 
 To pass relay flags ([see Bind address](#bind-address)), append them after `sh -s --`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/steelbrain/LemurPouch/main/scripts/install.sh | sh -s -- --listen 0.0.0.0:9000
-# curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --listen 0.0.0.0:9000
+curl -fsSL https://raw.githubusercontent.com/steelbrain/LemurPouch/main/scripts/install.sh | sh -s -- --serve --listen 0.0.0.0:9000
+# curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --serve --listen 0.0.0.0:9000
+# (bare --listen still implies --serve for compatibility)
 ```
 
-**Client mode (native TUI)** — forward `--connect` so the installer runs the TUI instead of the relay. Under `curl | sh`, stdin is the script pipe; the installer reattaches `/dev/tty` for the interactive client when available:
+**Skip the picker** — forward mode flags. Under `curl | sh`, stdin is the script pipe; the installer reattaches `/dev/tty` for interactive modes when available:
 
 ```sh
+# Relay only
+curl -fsSL https://raw.githubusercontent.com/steelbrain/LemurPouch/main/scripts/install.sh | sh -s -- --serve
+# TUI client only
 curl -fsSL https://raw.githubusercontent.com/steelbrain/LemurPouch/main/scripts/install.sh | sh -s -- --connect http://192.168.1.5:8080/
 # curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --connect http://192.168.1.5:8080/
 ```

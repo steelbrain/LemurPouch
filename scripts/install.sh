@@ -1,10 +1,13 @@
 #!/bin/sh
-# install.sh — Install and run the LemurPouch relay.
+# install.sh — Install LemurPouch, then launch the interactive picker.
 #
 # Usage:
 #   curl -fsSL https://lemurpouch.com/install.sh | sh
-#   curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --listen 0.0.0.0:9000
+#   curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --serve
+#   curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --serve --listen 0.0.0.0:9000
+#   curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --connect http://HOST:8080/
 #
+# Default (no args): run bare LemurPouch → Start a relay / Connect to a relay.
 # Re-runs are idempotent: download skipped if the binary already exists.
 # Set LP_FORCE=1 to re-download.
 
@@ -114,37 +117,56 @@ echo ""
 echo "Installed at: $bin_path"
 echo ""
 
-# Detect client mode: if the user forwarded --connect, run the TUI client
-# instead of the relay. Under curl|sh the pipe owns stdin, so reattach
-# /dev/tty for bubbletea when available.
+# --- Launch -----------------------------------------------------------------
+#
+# Under curl|sh stdin is the script pipe, so interactive modes reattach
+# /dev/tty when available. Default is bare LemurPouch (TTY → picker).
+# Explicit --serve / --connect / --listen are forwarded; bare --listen
+# (legacy install docs) implies --serve.
+
 wants_connect=0
+wants_serve=0
+has_listen=0
 for arg in "$@"; do
-    if [ "$arg" = "--connect" ]; then
-        wants_connect=1
-        break
-    fi
+    case "$arg" in
+        --connect) wants_connect=1 ;;
+        --serve)   wants_serve=1 ;;
+        --listen)  has_listen=1 ;;
+    esac
 done
 
-if [ "$wants_connect" -eq 1 ]; then
-    if (exec </dev/tty) 2>/dev/null; then
-        echo "Starting LemurPouch client (Ctrl-C to stop)..."
-        echo ""
-        exec "$bin_path" "$@" </dev/tty
-    else
-        echo "Installed. No controlling TTY available for client mode."
-        echo "Run: $bin_path $*"
-        echo ""
-        exit 0
-    fi
+# Preserve `sh -s -- --listen :9000` from older docs (used to auto-inject --serve).
+if [ "$has_listen" -eq 1 ] && [ "$wants_serve" -eq 0 ] && [ "$wants_connect" -eq 0 ]; then
+    set -- --serve "$@"
+    wants_serve=1
 fi
 
-echo "Starting the LemurPouch relay (Ctrl-C to stop)..."
-echo "To connect a TUI client instead:"
-echo "  curl -fsSL …/install.sh | sh -s -- --connect http://HOST:8080/"
-echo "  # or: $bin_path --connect http://HOST:8080/"
-echo ""
+# --serve is non-interactive: no TTY required.
+if [ "$wants_serve" -eq 1 ]; then
+    echo "Starting the LemurPouch relay (Ctrl-C to stop)..."
+    echo ""
+    exec "$bin_path" "$@"
+fi
 
-# Default to running the relay server (the installer's purpose). A bare
-# `LemurPouch` prints help / picker, so pass --serve explicitly; any extra
-# args (e.g. --listen 0.0.0.0:9000) are forwarded after it.
-exec "$bin_path" --serve "$@"
+# Picker (no mode flags) or --connect need a real terminal.
+if (exec </dev/tty) 2>/dev/null; then
+    if [ "$wants_connect" -eq 1 ]; then
+        echo "Starting LemurPouch client (Ctrl-C to stop)..."
+    else
+        echo "Starting LemurPouch (choose relay or client)..."
+    fi
+    echo ""
+    exec "$bin_path" "$@" </dev/tty
+fi
+
+echo "Installed. No controlling TTY available for interactive mode."
+if [ "$#" -gt 0 ]; then
+    echo "Run: $bin_path $*"
+else
+    echo "Run: $bin_path"
+    echo "  (interactive picker: Start a relay / Connect to a relay)"
+    echo "  or: $bin_path --serve"
+    echo "  or: $bin_path --connect http://HOST:8080/"
+fi
+echo ""
+exit 0

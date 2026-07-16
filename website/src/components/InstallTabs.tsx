@@ -24,8 +24,11 @@ const TABS: readonly TabDef[] = [
     note: (
       <>
         Verifies the SHA-256 of the release before running. Installs to{" "}
-        <code className="font-mono text-foreground">~/.local/bin</code>.
-        Re-runs are idempotent. Client (TUI) mode:{" "}
+        <code className="font-mono text-foreground">~/.local/bin</code>, then
+        opens the picker (Start a relay / Connect to a relay). Re-runs are
+        idempotent. Skip the picker with{" "}
+        <code className="font-mono text-foreground">… | sh -s -- --serve</code>{" "}
+        or{" "}
         <code className="font-mono text-foreground">
           … | sh -s -- --connect http://HOST:8080/
         </code>
@@ -40,14 +43,15 @@ const TABS: readonly TabDef[] = [
     note: (
       <>
         PowerShell. Verifies the SHA-256 before running. Installs to{" "}
-        <code className="font-mono text-foreground">~/.local/bin</code>.
-        Re-runs are idempotent.{" "}
+        <code className="font-mono text-foreground">~/.local/bin</code>, then
+        opens the picker. Re-runs are idempotent.{" "}
         <code className="font-mono text-foreground">irm | iex</code> cannot
         forward args — save the script and run with{" "}
+        <code className="font-mono text-foreground">--serve</code> or{" "}
         <code className="font-mono text-foreground">
           --connect http://HOST:8080/
         </code>{" "}
-        for the native TUI client.
+        to skip the picker.
       </>
     ),
   },

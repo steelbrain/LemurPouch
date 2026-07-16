@@ -1,10 +1,14 @@
-# install.ps1 — Install and run the LemurPouch relay.
+# install.ps1 — Install LemurPouch, then launch the interactive picker.
 #
 # Usage:
 #   irm https://lemurpouch.com/install.ps1 | iex
+#   powershell -File .\install.ps1 --serve
+#   powershell -File .\install.ps1 --connect http://HOST:8080/
 #
+# Default (no args): run bare LemurPouch.exe → Start a relay / Connect.
 # Re-runs are idempotent: download skipped if the binary already exists.
 # Set $env:LP_FORCE='1' to re-download.
+# Note: `irm | iex` cannot forward args — use download-then-run for flags.
 
 $ErrorActionPreference = 'Stop'
 
@@ -86,22 +90,28 @@ Write-Host ''
 Write-Host "Installed at: $BinPath"
 Write-Host ''
 
-# Client mode: if --connect is among the forwarded args, run the binary
-# as-is (do not force --serve). Note: `irm | iex` cannot forward args at
-# all — Windows client mode uses download-then-run from the README.
-if ($args -contains '--connect') {
-    Write-Host 'Starting LemurPouch client (Ctrl-C to stop)...'
-    Write-Host ''
-    & $BinPath @args
-    exit $LASTEXITCODE
+# Default: bare binary → interactive picker (TTY). Explicit --serve /
+# --connect / --listen are forwarded. Bare --listen (legacy docs) implies
+# --serve. Note: `irm | iex` cannot forward args — use download-then-run.
+$launchArgs = @($args)
+$wantsConnect = $launchArgs -contains '--connect'
+$wantsServe = $launchArgs -contains '--serve'
+$hasListen = $launchArgs -contains '--listen'
+if ($hasListen -and -not $wantsServe -and -not $wantsConnect) {
+    $launchArgs = @('--serve') + $launchArgs
+    $wantsServe = $true
 }
 
-Write-Host 'Starting the LemurPouch relay (Ctrl-C to stop)...'
-Write-Host "To connect a TUI client instead, run: $BinPath --connect <relay-url>"
-Write-Host ''
+if ($wantsServe) {
+    Write-Host 'Starting the LemurPouch relay (Ctrl-C to stop)...'
+    Write-Host ''
+} elseif ($wantsConnect) {
+    Write-Host 'Starting LemurPouch client (Ctrl-C to stop)...'
+    Write-Host ''
+} else {
+    Write-Host 'Starting LemurPouch (choose relay or client)...'
+    Write-Host ''
+}
 
-# Default to running the relay server (the installer's purpose). A bare
-# `LemurPouch` prints help / picker, so pass --serve explicitly; any extra
-# args (e.g. --listen 0.0.0.0:9000) are forwarded after it.
-& $BinPath --serve @args
+& $BinPath @launchArgs
 exit $LASTEXITCODE
