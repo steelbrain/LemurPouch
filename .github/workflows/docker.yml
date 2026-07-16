@@ -13,17 +13,19 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # The image lives at ghcr.io/<owner>/<repo> — same name as the GitHub
-  # repo (currently LemurPouch). Tracks renames via github.repository.
+  # GHCR / Docker refs must be all-lowercase. github.repository is
+  # steelbrain/LemurPouch (mixed case after the rename) and fails with
+  # "invalid reference format: repository name must be lowercase".
+  # Package path is fixed as <owner>/lemurpouch (matches README).
   #
   # The published image is a unified multi-platform manifest list
   # spanning linux/amd64, linux/arm64, and windows/amd64. A single
-  # `docker pull LemurPouch:latest` resolves to the right per-OS+arch
-  # image automatically — Windows users do NOT need a special tag.
-  # That's why this workflow has 4 jobs: build each platform's image
-  # by digest only, then a merge job assembles all digests into one
-  # manifest list per public tag.
-  IMAGE_NAME: ${{ github.repository }}
+  # `docker pull ghcr.io/<owner>/lemurpouch:latest` resolves to the
+  # right per-OS+arch image automatically — Windows users do NOT need
+  # a special tag. That's why this workflow has 4 jobs: build each
+  # platform's image by digest only, then a merge job assembles all
+  # digests into one manifest list per public tag.
+  IMAGE_NAME: ${{ github.repository_owner }}/lemurpouch
 
 jobs:
   # Linux platforms run as a 2-cell matrix on ubuntu-latest. Each cell
@@ -293,7 +295,7 @@ jobs:
           retention-days: 1
 
   # Assemble all per-platform digests into one manifest list per public
-  # tag. After this job, `docker pull LemurPouch:<tag>` resolves to
+  # tag. After this job, `docker pull …/lemurpouch:<tag>` resolves to
   # the right image for the host's OS+arch automatically.
   #
   # Atomicity: if any platform fails to build/push, this job doesn't

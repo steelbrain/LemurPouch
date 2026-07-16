@@ -204,7 +204,7 @@ Archive naming: `LemurPouch-<goos>-<goarch>.{tar.gz,zip}`. Inside, the binary is
 
 ## Docker / ghcr.io
 
-The repo ships two Dockerfiles — `Dockerfile` (Linux multi-stage: Node → Go → distroless/static) and `Dockerfile.windows` (windows/amd64, nanoserver) — and one workflow `.github/workflows/docker.yml` that publishes them as a **single unified multi-platform manifest** at `ghcr.io/<owner>/LemurPouch` (same name as the GitHub repo). `docker pull LemurPouch:latest` resolves to the right image for the host's OS+arch automatically; there is no Windows-specific tag suffix. (No windows/arm64 — Windows Server containers don't ship arm64 base images.)
+The repo ships two Dockerfiles — `Dockerfile` (Linux multi-stage: Node → Go → distroless/static) and `Dockerfile.windows` (windows/amd64, nanoserver) — and one workflow `.github/workflows/docker.yml` that publishes them as a **single unified multi-platform manifest** at `ghcr.io/<owner>/lemurpouch` (always lowercase — GHCR rejects mixed-case image names even when the GitHub repo is `LemurPouch`). `docker pull ghcr.io/<owner>/lemurpouch:latest` resolves to the right image for the host's OS+arch automatically; there is no Windows-specific tag suffix. (No windows/arm64 — Windows Server containers don't ship arm64 base images.)
 
 Triggers and tags (same scheme for every platform under one tag):
 - pushes to `main` → `:main`, `:sha-<short>`, `:latest`

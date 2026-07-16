@@ -89,7 +89,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 --connect http://192.168.
 ### Docker
 
 ```sh
-docker run --rm -p 8080:8080 ghcr.io/steelbrain/LemurPouch:latest
+docker run --rm -p 8080:8080 ghcr.io/steelbrain/lemurpouch:latest
 ```
 
 Then open `http://<your-LAN-IP>:8080/` on each device. (The image sets `LEMURPOUCH_IN_CONTAINER=1`, so the relay knows to print a hint that the IPs it enumerates are container-internal and you should use the host's LAN IP instead.)
