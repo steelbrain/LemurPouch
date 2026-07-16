@@ -56,24 +56,6 @@ const TABS: readonly TabDef[] = [
     ),
   },
   {
-    id: "client",
-    label: "TUI client",
-    command:
-      "curl -fsSL https://lemurpouch.com/install.sh | sh -s -- --connect http://192.168.1.5:8080/",
-    note: (
-      <>
-        Installs the binary and launches the native terminal client against a
-        relay. Under curl|sh the installer reattaches{" "}
-        <code className="font-mono text-foreground">/dev/tty</code> so the TUI
-        has a real terminal. Or run{" "}
-        <code className="font-mono text-foreground">
-          LemurPouch --connect http://HOST:8080/
-        </code>{" "}
-        after a normal install.
-      </>
-    ),
-  },
-  {
     id: "docker",
     label: "Docker",
     command:

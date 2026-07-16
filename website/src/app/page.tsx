@@ -140,12 +140,6 @@ export default function Home() {
                 Releases
               </a>
               <a
-                href="https://github.com/steelbrain/LemurPouch/blob/main/AGENTS.md"
-                className="text-foreground-muted hover:text-foreground"
-              >
-                Protocol spec
-              </a>
-              <a
                 href="https://github.com/steelbrain/LemurPouch/issues"
                 className="text-foreground-muted hover:text-foreground"
               >
